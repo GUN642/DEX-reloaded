@@ -144,6 +144,12 @@ object DexController {
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
 
+    /**
+     * Klick oder Fokuswechsel: Der Cursor in der Ziel-App steht woanders. Die Handy-Tastatur
+     * muss ihren Textpuffer verwerfen (siehe TrackpadView).
+     */
+    @Volatile var onTextContextLost: (() -> Unit)? = null
+
     private val pending = mutableSetOf<Int>()
     private var saveAppsLater = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -621,6 +627,7 @@ object DexController {
     }
 
     private fun setFocus(i: Int) {
+        if (i != _focusedScreen.value) onTextContextLost?.invoke()
         _focusedScreen.value = i
         renderer.focusedScreen = i
     }
@@ -671,6 +678,7 @@ object DexController {
     private fun canvasX() = pointerScreen * screenSize(0).first + pointerX
 
     fun pointerDown() {
+        onTextContextLost?.invoke()
         if (wide) {
             WideDesk.pointerDown(canvasX(), pointerY)
             requestPhoneFocus()
@@ -811,6 +819,7 @@ object DexController {
      * alles andere geht an den fokussierten Bildschirm. Gibt true zurück, wenn verbraucht.
      */
     fun handleKey(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN) onTextContextLost?.invoke()
         if (event.isCtrlPressed && event.isAltPressed) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 when (event.keyCode) {
