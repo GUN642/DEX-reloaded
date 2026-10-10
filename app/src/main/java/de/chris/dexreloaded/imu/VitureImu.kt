@@ -201,6 +201,8 @@ object VitureImu {
             var windowCount = 0
             var lastData = windowStart
             var lastCommand = windowStart
+            var lastFwQuery = windowStart
+            var fwTries = 0
             while (!me.isInterrupted && thread === me) {
                 val n = conn.bulkTransfer(epIn, buf, buf.size, 200)
                 val now = SystemClock.elapsedRealtime()
@@ -212,6 +214,12 @@ object VitureImu {
                 if (now - lastData > 2000 && now - lastCommand > 2000) {
                     send(conn, epOut, frame(MSG_IMU_CTRL, byteArrayOf(STREAM_POSE.toByte(), RATE_240.toByte())))
                     lastCommand = now
+                }
+                // Firmware nachfragen, falls die erste Antwort im Datenstrom unterging
+                if (_state.value.firmware == null && fwTries < 5 && now - lastFwQuery > 3000) {
+                    send(conn, epOut, frame(MSG_FIRMWARE, ByteArray(0)))
+                    lastFwQuery = now
+                    fwTries++
                 }
                 if (now - windowStart >= 1000) {
                     val rate = (windowCount * 1000 / (now - windowStart)).toInt()

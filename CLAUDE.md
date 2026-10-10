@@ -104,14 +104,11 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 2. Wunsch von Chris: Bildschirm 2 bleibt 1920x1080 und füllt das Sichtfeld genau. Bildschirm 1 und 3 gleich groß daneben, erreichbar durch Kopfdrehen, zusätzlich per Knopf. Darum wurde das Kopf-Tracking aus Phase 3 vorgezogen.
 3. Layout: drei **flache** Flächen im Bogen um den Betrachter (Abstand 1, Lücke 1,5°). Bei Größe 100 % füllt eine Fläche genau das Sichtfeld (Projektion aus 50° diagonal). Einstellbar: Größe, Sichtfeld. Krümmung der einzelnen Fläche ist vorerst weggefallen, weil sie die Pixeltreue stört.
 4. IMU ohne Hersteller-SDK. Das offizielle SDK (`libglasses.so`) ist proprietär und darf nicht verteilt werden. Protokoll V2 stammt aus **viture-v2** (Holger Bartnick, MIT, PROTOCOL.md), dort für genau Pro 2 / 0x1301 gemessen. Umsetzung in `imu/VitureImu.kt`: USB-Host, HID-Interface claimen, Befehl `0x0301 [1, 3]` (Pose-Strom 240 Hz), Pose-Ereignis `0x7308` mit Quaternion w, x, y, z ab Nutzlast-Byte 8, little-endian. Firmware über `0x3003`.
-5. `imu/HeadTracker.kt`: Gieren und Nicken relativ zu einer Bezugsrichtung, leichte Glättung, Zentrieren. Geräteachsen als Annahme Nord-West-Oben (hoch +Z, rechts -Y), per Ausrichten-Dialog (geradeaus, rechts drehen, hoch neigen) am Gerät bestimmbar. Rollen wird noch nicht genutzt.
+5. `imu/HeadTracker.kt`: Gieren und Nicken relativ zu einer Bezugsrichtung, One-Euro-Filter (in Ruhe stark, bei Bewegung schwach geglättet), Zentrieren. Geräteachsen am Gerät gemessen: hoch +Y, rechts +X (Standard ab 0.2.1). Per Ausrichten-Dialog (geradeaus, rechts drehen, hoch neigen) neu bestimmbar. Rollen wird noch nicht genutzt.
+8. Die Presentation fordert den Displaymodus mit der höchsten Bildwiederholrate bei gleicher Auflösung an. Die Debug-Ansicht listet die Modi.
 6. Renderer zeichnet dauerhaft (`RENDERMODE_CONTINUOUSLY`). Kamera: Kopf plus Versatz der Knöpfe „Blick auf 1, 2, 3“.
 7. USB-Filter für VID 0x35CA in `MainActivity`, damit Android die App beim Anstecken anbietet und den Zugriff dauerhaft erlaubt.
 
 ## Stand
 
-Phase 1 auf dem Gerät bestätigt. 0.2.0 bringt das Layout mit Kopf-Tracking und wartet auf den Gerätetest. Zu prüfen:
-1. Kommen Pose-Daten (Rate in Hz in der Karte Kopf-Tracking)?
-2. Folgt die Ansicht beim Drehen und Neigen in die richtige Richtung? Sonst Ausrichten-Dialog und Achsen zurückmelden.
-3. Wie stark driftet das Gieren?
-Danach weiter mit Phase 2 (Eingabe, drei Apps).
+Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung. 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate. Als Nächstes Phase 2 (Eingabe, drei Apps).
