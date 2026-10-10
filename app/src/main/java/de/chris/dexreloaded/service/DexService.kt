@@ -88,6 +88,9 @@ class DexService() : IDexService.Stub() {
         append(", SDK ").append(Build.VERSION.SDK_INT)
         append(", Kontext ").append(if (context != null) "von Shizuku" else "System")
         append('\n')
+        append("Flags beim Anlegen: 0x").append(Integer.toHexString(HiddenApi.lastFlags))
+        if (HiddenApi.lastFlags and HiddenApi.VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED != 0) append(" (Fokus bleibt am Handy)")
+        append('\n')
         append("Virtuelle Displays: ")
         if (displays.isEmpty()) append("keine")
         displays.forEach { (id, vd) ->

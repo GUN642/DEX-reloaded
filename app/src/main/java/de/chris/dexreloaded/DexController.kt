@@ -17,6 +17,7 @@ import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.imu.HeadTracker
 import de.chris.dexreloaded.imu.VitureImu
 import de.chris.dexreloaded.render.GlassPresentation
+import de.chris.dexreloaded.render.NavBar
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
@@ -29,6 +30,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import kotlin.math.abs
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
@@ -544,6 +546,24 @@ object DexController {
         renderer.pointerScreen = if (presentation != null) pointerScreen else -1
         renderer.pointerX = pointerX
         renderer.pointerY = pointerY
+        val (w, h) = screenSize(pointerScreen)
+        navExpanded = dragScreen < 0 && _slots.value[pointerScreen] != null &&
+            pointerY > h - NavBar.TRIGGER_H && abs(pointerX - w / 2f) < NavBar.TRIGGER_W
+        renderer.navExpanded = navExpanded
+    }
+
+    private var navExpanded = false
+
+    /** Klick auf die Leiste unten (Zurück, Home)? Dann hier behandeln und nicht an die App geben. */
+    private fun handleNavClick(): Boolean {
+        if (!navExpanded) return false
+        val (w, h) = screenSize(pointerScreen)
+        val left = w / 2f - NavBar.WIDTH / 2f
+        val top = h - NavBar.MARGIN - NavBar.HEIGHT
+        if (pointerX < left || pointerX > left + NavBar.WIDTH || pointerY < top || pointerY > h - NavBar.MARGIN) return false
+        setFocus(pointerScreen)
+        if (pointerX < w / 2f) back() else goHome()
+        return true
     }
 
     private fun setFocus(i: Int) {
@@ -593,6 +613,7 @@ object DexController {
 
     /** Maustaste oder Finger gedrückt: Berührung beginnt. */
     fun pointerDown() {
+        if (handleNavClick()) return
         setFocus(pointerScreen)
         val slot = _slots.value[pointerScreen] ?: return
         val svc = ShizukuManager.service.value ?: return

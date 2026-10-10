@@ -284,6 +284,15 @@ class TrackpadView(context: Context) : View(context) {
         super.onDetachedFromWindow()
     }
 
+    /** Geht der Mauszugriff verloren, eine gedrückte Taste sicher loslassen (sonst wird es ein langes Drücken). */
+    override fun onPointerCaptureChange(hasCapture: Boolean) {
+        super.onPointerCaptureChange(hasCapture)
+        if (!hasCapture && mouseButtonDown) {
+            mouseButtonDown = false
+            DexController.pointerUp()
+        }
+    }
+
     override fun onCapturedPointerEvent(e: MotionEvent): Boolean {
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE, MotionEvent.ACTION_HOVER_MOVE -> {
