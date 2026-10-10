@@ -8,6 +8,8 @@ import android.os.Build
 import android.view.Display
 import de.chris.dexreloaded.BuildConfig
 import de.chris.dexreloaded.DexController
+import de.chris.dexreloaded.imu.HeadTracker
+import de.chris.dexreloaded.imu.VitureImu
 import de.chris.dexreloaded.shizuku.ShizukuManager
 
 /** Sammelt Infos für die Debug-Ansicht. Jede Sektion ist Titel und Text. */
@@ -19,6 +21,7 @@ object DebugInfo {
         "Virtuelle Displays (eigene)" to virtualDisplays(),
         "Shizuku" to ShizukuManager.describe(),
         "USB-Geräte" to usb(context),
+        "Kopf-Tracking" to imu(),
     )
 
     fun asText(sections: List<Pair<String, String>>): String =
@@ -105,6 +108,23 @@ object DebugInfo {
                     append('\n')
                 }
             }.trimEnd()
+        }
+    }
+
+    private fun imu(): String {
+        val st = VitureImu.state.value
+        val q = FloatArray(4).also { VitureImu.latest(it) }
+        return buildString {
+            append("Status: ").append(st.status.text)
+            if (st.detail.isNotBlank()) append(" (").append(st.detail).append(')')
+            append('\n')
+            append("Produkt: ").append(st.product ?: "?").append(", Firmware: ").append(st.firmware ?: "?").append('\n')
+            append("Rate: ").append(st.rateHz).append(" Hz, Pakete: ").append(VitureImu.sampleCount).append('\n')
+            append("Quaternion w,x,y,z: ").append(q.joinToString(", ") { "%.3f".format(it) }).append('\n')
+            append("Gieren ").append("%.1f".format(HeadTracker.lastYaw))
+            append("°, Nicken ").append("%.1f".format(HeadTracker.lastPitch)).append("°\n")
+            append("Achsen: hoch ").append(HeadTracker.axisName(HeadTracker.upAxis))
+            append(", rechts ").append(HeadTracker.axisName(HeadTracker.rightAxis))
         }
     }
 

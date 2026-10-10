@@ -8,8 +8,8 @@ Nicht ungefragt mit der Umsetzung beginnen. Sobald Chris **LOS** schreibt, mit P
 
 ## Ausgangslage
 
-1. Gerät: Samsung Galaxy S25 Ultra, One UI 8 bzw. 8.5, Android 16.
-2. Brille: laut Chris **Viture Pro 2**. Genaue Modellbezeichnung sowie USB-VID und -PID am Gerät prüfen, bevor das IMU-Protokoll festgelegt wird.
+1. Gerät: Samsung Galaxy S25 Ultra (SM-S938B). Laut Debug-Ansicht inzwischen Android 17, SDK 37.
+2. Brille: **VITURE PRO 2 XR Glasses**, am Gerät geprüft: VID 0x35CA, PID 0x1301, ein HID-Interface mit zwei Endpunkten. Display 1920x1080 @ 60 Hz, Sichtfeld 50° diagonal.
 3. Shizuku ist auf dem Handy installiert und Chris bekannt.
 4. DeX wird beim Anstecken der Brille nicht aktiviert. HDMI-Modus in den Samsung-Einstellungen auf Bildschirm spiegeln. Die Brille ist für Android dann ein normales externes Display.
 5. Bedienung: Handydisplay als Trackpad **und** Bluetooth-Maus und -Tastatur. Beides muss gehen.
@@ -98,10 +98,20 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 5. Die Presentation hängt an `MainActivity`. Wird sie geschlossen, werden alle virtuellen Displays freigegeben.
 6. Virtuelle Displays laufen ohne Systemdekoration (kein Launcher, keine Bildschirmtastatur dort).
 
+## Festlegungen ab 0.2.0 (nach erstem Gerätetest)
+
+1. Gerätetest 0.1.2: Presentation liegt sauber über dem Spiegelbild. Virtuelles Display mit vollen scrcpy-Flags geht, Soldaten Dashboard läuft darin.
+2. Wunsch von Chris: Bildschirm 2 bleibt 1920x1080 und füllt das Sichtfeld genau. Bildschirm 1 und 3 gleich groß daneben, erreichbar durch Kopfdrehen, zusätzlich per Knopf. Darum wurde das Kopf-Tracking aus Phase 3 vorgezogen.
+3. Layout: drei **flache** Flächen im Bogen um den Betrachter (Abstand 1, Lücke 1,5°). Bei Größe 100 % füllt eine Fläche genau das Sichtfeld (Projektion aus 50° diagonal). Einstellbar: Größe, Sichtfeld. Krümmung der einzelnen Fläche ist vorerst weggefallen, weil sie die Pixeltreue stört.
+4. IMU ohne Hersteller-SDK. Das offizielle SDK (`libglasses.so`) ist proprietär und darf nicht verteilt werden. Protokoll V2 stammt aus **viture-v2** (Holger Bartnick, MIT, PROTOCOL.md), dort für genau Pro 2 / 0x1301 gemessen. Umsetzung in `imu/VitureImu.kt`: USB-Host, HID-Interface claimen, Befehl `0x0301 [1, 3]` (Pose-Strom 240 Hz), Pose-Ereignis `0x7308` mit Quaternion w, x, y, z ab Nutzlast-Byte 8, little-endian. Firmware über `0x3003`.
+5. `imu/HeadTracker.kt`: Gieren und Nicken relativ zu einer Bezugsrichtung, leichte Glättung, Zentrieren. Geräteachsen als Annahme Nord-West-Oben (hoch +Z, rechts -Y), per Ausrichten-Dialog (geradeaus, rechts drehen, hoch neigen) am Gerät bestimmbar. Rollen wird noch nicht genutzt.
+6. Renderer zeichnet dauerhaft (`RENDERMODE_CONTINUOUSLY`). Kamera: Kopf plus Versatz der Knöpfe „Blick auf 1, 2, 3“.
+7. USB-Filter für VID 0x35CA in `MainActivity`, damit Android die App beim Anstecken anbietet und den Zugriff dauerhaft erlaubt.
+
 ## Stand
 
-Phase 1 umgesetzt, wartet auf Gerätetest durch Chris. Offene Punkte zum Prüfen:
-1. Erscheint die Brille im Spiegelmodus in der Kategorie Presentation, und liegt die Presentation sauber über dem gespiegelten Bild?
-2. Gehen die vollen scrcpy-Flags unter One UI 8 (siehe Protokoll und Debug-Ansicht)?
-3. Startet die gewählte App auf dem virtuellen Display, auch wenn sie schon auf dem Handy läuft?
-4. VID und PID der Brille aus der Debug-Ansicht notieren.
+Phase 1 auf dem Gerät bestätigt. 0.2.0 bringt das Layout mit Kopf-Tracking und wartet auf den Gerätetest. Zu prüfen:
+1. Kommen Pose-Daten (Rate in Hz in der Karte Kopf-Tracking)?
+2. Folgt die Ansicht beim Drehen und Neigen in die richtige Richtung? Sonst Ausrichten-Dialog und Achsen zurückmelden.
+3. Wie stark driftet das Gieren?
+Danach weiter mit Phase 2 (Eingabe, drei Apps).

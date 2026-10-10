@@ -24,7 +24,7 @@ class GlassPresentation(
             setEGLConfigChooser(8, 8, 8, 8, 16, 0)
             preserveEGLContextOnPause = true
             setRenderer(renderer)
-            renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
+            renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
         }
         renderer.glView = view
         glView = view
