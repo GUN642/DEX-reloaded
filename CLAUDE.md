@@ -119,6 +119,13 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 6. Trackpad ist ein Vollbild-Modus **in** `MainActivity` (keine eigene Activity), damit die Presentation sichtbar bleibt. `input/TrackpadView`: ein Finger bewegt, Tippen klickt, ruhig halten dann ziehen (langes Drücken), zwei Finger scrollen, drei Finger wischen wechselt den Bildschirm. Bluetooth-Maus per Pointer Capture. Bildschirm bleibt an, „Dunkel“ dimmt das Handy.
 7. Bluetooth-Tastatur: `MainActivity.dispatchKeyEvent` leitet bei offenem Trackpad Tasten von echten Geräten an den fokussierten Bildschirm. Kürzel: Strg+Alt+Links/Rechts (Bildschirm wechseln), Strg+Alt+1/2/3, Strg+Alt+C (zentrieren).
 
+## Fokus und Leiste (ab 0.4.2)
+
+1. Problem aus dem Test: Ein Mausklick auf der Brille holte den Systemfokus auf das virtuelle Display, die Handy-App verlor ihn und damit Pointer Capture. Die Maus erschien wieder auf dem Handy, das Loslassen kam nicht an und aus dem Klick wurde ein langes Drücken.
+2. Lösung: virtuelle Displays ab Android 14 zusätzlich mit `VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED` (1 shl 16). Rückfall auf die bisherigen Flags, dann auf die Grundflags. Die verwendeten Flags stehen in der Debug-Ansicht. Wirkt erst bei neu angelegten Displays.
+3. `TrackpadView.onPointerCaptureChange`: geht der Zugriff verloren, wird eine gedrückte Maustaste sofort losgelassen.
+4. Leiste unten (`render/NavBar`): auf dem Bildschirm mit dem Zeiger ein dünner Griff unten in der Mitte. Fährt der Zeiger hin, klappt sie auf: „Zurück“ und „Home“. Klicks darauf behandelt `DexController.handleNavClick`, sie gehen nicht an die App.
+
 ## Einrasten (ab 0.4.1)
 
 Option „Einrasten“ in der Karte Kopf-Tracking, Standard aus. Das Bild steht still auf einem Bildschirm (kein Nicken, kein Gieren), wie ohne Kopf-Tracking. Geht der Blick mehr als 0,6 Bildschirmbreiten von dessen Mitte weg, gleitet die Ansicht zum Nachbarn. Rückweg ebenso, dadurch eingebaute Hysterese. Umsetzung `WorkspaceRenderer.snapYaw`.
@@ -135,4 +142,4 @@ Option „Einrasten“ in der Karte Kopf-Tracking, Standard aus. Das Bild steht 
 
 ## Stand
 
-Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). Gerätetest 0.3.0: Trackpad gut, etwas zu empfindlich, Halten und Ziehen geht. Maus und Tastatur noch ungetestet. 0.3.1: Bildschirme ohne Lücke, Fokusrahmen dünn und rot, Zeigergeschwindigkeit für Trackpad und Maus einstellbar (Standard Trackpad 1,6, Maus 1,3), Knopf „Tastatur“ im Trackpad. Gerätetest 0.4.0: alles läuft. 0.4.1: Fokusrahmen entfernt, Option „Einrasten“. Maus und Tastatur weiter ungetestet.
+Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). Gerätetest 0.3.0: Trackpad gut, etwas zu empfindlich, Halten und Ziehen geht. Maus und Tastatur noch ungetestet. 0.3.1: Bildschirme ohne Lücke, Fokusrahmen dünn und rot, Zeigergeschwindigkeit für Trackpad und Maus einstellbar (Standard Trackpad 1,6, Maus 1,3), Knopf „Tastatur“ im Trackpad. Gerätetest 0.4.0: alles läuft. 0.4.1: Fokusrahmen entfernt, Option „Einrasten“ (Schwelle passt laut Chris). Test Maus: Klick holte die Maus zurück aufs Handy. 0.4.2: Fokus bleibt am Handy, Leiste mit Zurück und Home auf der Brille.

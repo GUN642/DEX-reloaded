@@ -36,6 +36,7 @@ object HiddenApi {
     const val VIRTUAL_DISPLAY_FLAG_TOUCH_FEEDBACK_DISABLED = 1 shl 13
     const val VIRTUAL_DISPLAY_FLAG_OWN_FOCUS = 1 shl 14
     const val VIRTUAL_DISPLAY_FLAG_DEVICE_DISPLAY_GROUP = 1 shl 15
+    const val VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED = 1 shl 16
 
     /** Grundflags, die ohne besondere Rechte gehen. */
     const val BASE_FLAGS = VIRTUAL_DISPLAY_FLAG_PUBLIC or
@@ -86,6 +87,10 @@ object HiddenApi {
     }
 
     private var displayManager: DisplayManager? = null
+
+    /** Flags des zuletzt angelegten virtuellen Displays (für die Debug-Ansicht). */
+    @Volatile
+    var lastFlags = 0
 
     @SuppressLint("PrivateApi")
     fun displayManager(base: Context?): DisplayManager {
@@ -153,13 +158,29 @@ object HiddenApi {
         surface: Surface,
     ): VirtualDisplay {
         val dm = displayManager(base)
-        return try {
-            dm.createVirtualDisplay(name, width, height, dpi, surface, FULL_FLAGS)
-                ?: throw IllegalStateException("createVirtualDisplay lieferte null")
-        } catch (e: SecurityException) {
-            Log.w(TAG, "Volle Flags abgelehnt, versuche Grundflags", e)
-            dm.createVirtualDisplay(name, width, height, dpi, surface, BASE_FLAGS)
-                ?: throw IllegalStateException("createVirtualDisplay lieferte null")
+        // Ab Android 14: Klicks auf dem virtuellen Display holen den Systemfokus nicht vom Handy weg.
+        // Sonst verliert die Handy-App den Fokus und damit den Mauszugriff (Pointer Capture).
+        val candidates = buildList {
+            if (Build.VERSION.SDK_INT >= 34) add(FULL_FLAGS or VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED)
+            add(FULL_FLAGS)
+            add(BASE_FLAGS)
         }
+        var last: Exception? = null
+        for (flags in candidates) {
+            try {
+                val vd = dm.createVirtualDisplay(name, width, height, dpi, surface, flags)
+                if (vd != null) {
+                    lastFlags = flags
+                    return vd
+                }
+            } catch (e: SecurityException) {
+                Log.w(TAG, "Flags 0x${Integer.toHexString(flags)} abgelehnt", e)
+                last = e
+            } catch (e: IllegalArgumentException) {
+                Log.w(TAG, "Flags 0x${Integer.toHexString(flags)} ungültig", e)
+                last = e
+            }
+        }
+        throw last ?: IllegalStateException("createVirtualDisplay lieferte null")
     }
 }

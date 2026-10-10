@@ -111,6 +111,12 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     private var programColor = 0
     private var pointerTexture = 0
+    private var navBarTexture = 0
+    private var navHandleTexture = 0
+
+    /** Leiste unten (Zurück, Home) aufgeklappt, sonst nur der Griff. */
+    @Volatile
+    var navExpanded = false
     private var dynamicVbo = 0
     private val quad = FloatArray(4 * 5)
     private val quadBuf = ByteBuffer.allocateDirect(quad.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
@@ -187,6 +193,14 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         val arrow = PointerBitmap.create()
         pointerTexture = GlUtil.textureFromBitmap(arrow)
         arrow.recycle()
+        NavBar.barBitmap().let {
+            navBarTexture = GlUtil.textureFromBitmap(it)
+            it.recycle()
+        }
+        NavBar.handleBitmap().let {
+            navHandleTexture = GlUtil.textureFromBitmap(it)
+            it.recycle()
+        }
         val vbo = IntArray(1)
         GLES30.glGenBuffers(1, vbo, 0)
         dynamicVbo = vbo[0]
@@ -272,6 +286,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
             drawPanel(panel)
         }
+        drawNavBar()
         drawPointer()
         GlUtil.checkError("onDrawFrame")
     }
@@ -339,6 +354,33 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, dynamicVbo)
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, quad.size * 4, quadBuf, GLES30.GL_DYNAMIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+    }
+
+    /** Griff oder Leiste (Zurück, Home) unten in der Mitte des Bildschirms mit dem Zeiger. */
+    private fun drawNavBar() {
+        val i = pointerScreen
+        if (i !in 0 until SCREEN_COUNT || panels[i] == null || streams[i] == null) return
+        val w = pixelW[i]
+        val h = pixelH[i]
+        val tex: Int
+        if (navExpanded) {
+            fillQuad(i, w / 2f - NavBar.WIDTH / 2f, h - NavBar.MARGIN - NavBar.HEIGHT, w / 2f + NavBar.WIDTH / 2f, h - NavBar.MARGIN, 0.997f)
+            tex = navBarTexture
+        } else {
+            fillQuad(i, w / 2f - NavBar.HANDLE_W / 2f, h - 10f - NavBar.HANDLE_H, w / 2f + NavBar.HANDLE_W / 2f, h - 10f, 0.997f)
+            tex = navHandleTexture
+        }
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glUseProgram(program2d)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, mvp, 0)
+        drawPanel(Panel(dynamicVbo, 4))
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
     }
 
     /** Mauszeiger als Pfeil, vor der Fläche, ohne Tiefentest. */
