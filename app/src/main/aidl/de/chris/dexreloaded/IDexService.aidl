@@ -22,4 +22,13 @@ interface IDexService {
 
     // Kurzer Statustext für die Debug-Ansicht.
     String getInfo() = 6;
+
+    // Berührung (Finger) auf dem Display: action ist MotionEvent.ACTION_DOWN, _MOVE oder _UP.
+    oneway void injectTouch(int displayId, int action, float x, float y, long downTime) = 7;
+
+    // Mausrad an der Position (x, y). Positive v = nach oben.
+    oneway void injectScroll(int displayId, float x, float y, float h, float v) = 8;
+
+    // Taste an das Display. action ist KeyEvent.ACTION_DOWN oder _UP.
+    oneway void injectKey(int displayId, int action, int keyCode, int metaState, int repeat, long downTime) = 9;
 }

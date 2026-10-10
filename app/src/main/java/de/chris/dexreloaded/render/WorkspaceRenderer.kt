@@ -73,6 +73,40 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     private var yawOffset = 0f
 
+    // ---- Zeiger und Fokus (vom Hauptthread gesetzt) ----
+
+    /** Bildschirm mit dem Zeiger, -1 = Zeiger aus. */
+    @Volatile
+    var pointerScreen = -1
+
+    /** Zeigerposition in Pixeln des Bildschirms (Größe des virtuellen Displays). */
+    @Volatile
+    var pointerX = 0f
+
+    @Volatile
+    var pointerY = 0f
+
+    /** Bildschirm, der Tastatureingaben bekommt, -1 = keiner. */
+    @Volatile
+    var focusedScreen = -1
+
+    /** Wird auf dem Hauptthread gerufen, wenn sich der angeschaute Bildschirm ändert. */
+    var onGazeScreen: ((Int) -> Unit)? = null
+    private var gazeScreen = -1
+
+    /** Pixelgröße pro Bildschirm (für die Zeigerposition). */
+    private val pixelW = FloatArray(SCREEN_COUNT) { 1920f }
+    private val pixelH = FloatArray(SCREEN_COUNT) { 1080f }
+    private val panelCenter = FloatArray(SCREEN_COUNT)
+    private val panelHalfH = FloatArray(SCREEN_COUNT)
+    private var panelHalfW = 1f
+
+    private var programColor = 0
+    private var pointerTexture = 0
+    private var dynamicVbo = 0
+    private val quad = FloatArray(4 * 5)
+    private val quadBuf = ByteBuffer.allocateDirect(quad.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+
     private val mainHandler = Handler(Looper.getMainLooper())
     private val glTasks = ConcurrentLinkedQueue<() -> Unit>()
 
@@ -113,6 +147,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             val stream = Stream(tex, st, Surface(st))
             st.setOnFrameAvailableListener { stream.frameAvailable = true }
             streams[index] = stream
+            pixelW[index] = width.toFloat()
+            pixelH[index] = height.toFloat()
             if (panelAspect[index] != height.toFloat() / width) {
                 panelAspect[index] = height.toFloat() / width
                 geometryDirty = true
@@ -139,6 +175,13 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         program2d = GlUtil.program(VERTEX_SHADER, FRAGMENT_2D)
         programOes = GlUtil.program(VERTEX_SHADER, FRAGMENT_OES)
+        programColor = GlUtil.program(VERTEX_SHADER, FRAGMENT_COLOR)
+        val arrow = PointerBitmap.create()
+        pointerTexture = GlUtil.textureFromBitmap(arrow)
+        arrow.recycle()
+        val vbo = IntArray(1)
+        GLES30.glGenBuffers(1, vbo, 0)
+        dynamicVbo = vbo[0]
         // Neuer Kontext: alte Puffer-IDs sind ungültig
         panels.fill(null)
         for (i in 0 until SCREEN_COUNT) {
@@ -193,7 +236,10 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         System.arraycopy(mvp, 0, view, 0, 16)
         Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
 
+        updateGaze(yaw)
+
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+        drawFocusBorder()
         for (i in 0 until SCREEN_COUNT) {
             val panel = panels[i] ?: continue
             val stream = streams[i]
@@ -213,6 +259,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
             drawPanel(panel)
         }
+        drawPointer()
         GlUtil.checkError("onDrawFrame")
     }
 
@@ -224,6 +271,74 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, STRIDE, 12)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, panel.vertexCount)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+    }
+
+    /** Meldet, auf welchen Bildschirm die Blickmitte gerade zeigt. */
+    private fun updateGaze(yawDeg: Float) {
+        if (panelStepDeg <= 0f) return
+        val idx = (yawDeg / panelStepDeg + (SCREEN_COUNT - 1) / 2f).let { Math.round(it) }
+            .coerceIn(0, SCREEN_COUNT - 1)
+        if (idx != gazeScreen) {
+            gazeScreen = idx
+            onGazeScreen?.let { cb -> mainHandler.post { cb(idx) } }
+        }
+    }
+
+    /** Punkt auf Bildschirm [i] in Pixeln (px, py) als 3D-Punkt. [scale] < 1 rückt näher heran. */
+    private fun panelPoint(i: Int, px: Float, py: Float, scale: Float, out: FloatArray, at: Int) {
+        val x = (px / pixelW[i] * 2f - 1f) * panelHalfW
+        val y = (1f - py / pixelH[i] * 2f) * panelHalfH[i]
+        val c = cos(panelCenter[i])
+        val sn = sin(panelCenter[i])
+        out[at] = (x * c + sn) * scale
+        out[at + 1] = y * scale
+        out[at + 2] = (x * sn - c) * scale
+    }
+
+    /** Rechteck von (x0, y0) bis (x1, y1) in Pixeln auf Bildschirm [i] in [quad] schreiben. */
+    private fun fillQuad(i: Int, x0: Float, y0: Float, x1: Float, y1: Float, scale: Float) {
+        panelPoint(i, x0, y0, scale, quad, 0); quad[3] = 0f; quad[4] = 0f
+        panelPoint(i, x0, y1, scale, quad, 5); quad[8] = 0f; quad[9] = 1f
+        panelPoint(i, x1, y0, scale, quad, 10); quad[13] = 1f; quad[14] = 0f
+        panelPoint(i, x1, y1, scale, quad, 15); quad[18] = 1f; quad[19] = 1f
+        quadBuf.position(0)
+        quadBuf.put(quad).position(0)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, dynamicVbo)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, quad.size * 4, quadBuf, GLES30.GL_DYNAMIC_DRAW)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+    }
+
+    /** Rahmen um den Bildschirm mit Tastaturfokus, etwas hinter der Fläche. */
+    private fun drawFocusBorder() {
+        val i = focusedScreen
+        if (i !in 0 until SCREEN_COUNT || panels[i] == null) return
+        val b = 10f
+        fillQuad(i, -b, -b, pixelW[i] + b, pixelH[i] + b, 1.002f)
+        GLES30.glUseProgram(programColor)
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(programColor, "uColor"), 0.31f, 0.76f, 0.97f, 1f)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programColor, "uMvp"), 1, false, mvp, 0)
+        drawPanel(Panel(dynamicVbo, 4))
+    }
+
+    /** Mauszeiger als Pfeil, vor der Fläche, ohne Tiefentest. */
+    private fun drawPointer() {
+        val i = pointerScreen
+        if (i !in 0 until SCREEN_COUNT || panels[i] == null) return
+        val px = pointerX
+        val py = pointerY
+        val size = POINTER_PX * pixelH[i] / 1080f
+        fillQuad(i, px, py, px + size, py + size, 0.995f)
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        GLES30.glUseProgram(program2d)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, pointerTexture)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, mvp, 0)
+        drawPanel(Panel(dynamicVbo, 4))
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
     }
 
     /** Projektion aus dem Sichtfeld der Brille und Flächen passend dazu. */
@@ -240,8 +355,11 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         val halfAngle = atan(halfW)
         val step = 2f * halfAngle + Math.toRadians(GAP_DEG.toDouble()).toFloat()
         panelStepDeg = Math.toDegrees(step.toDouble()).toFloat()
+        panelHalfW = halfW
         for (i in 0 until SCREEN_COUNT) {
             val center = (i - (SCREEN_COUNT - 1) / 2f) * step
+            panelCenter[i] = center
+            panelHalfH[i] = halfW * panelAspect[i]
             buildPanel(i, center, halfW, halfW * panelAspect[i])
         }
     }
@@ -299,6 +417,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         const val SCREEN_COUNT = 3
 
         private const val GAP_DEG = 1.5f
+        private const val POINTER_PX = 40f
         private const val STRIDE = 5 * 4
 
         private const val VERTEX_SHADER = """#version 300 es
@@ -319,6 +438,16 @@ in vec2 vUv;
 out vec4 fragColor;
 void main() {
     fragColor = texture(uTex, vUv);
+}
+"""
+
+        private const val FRAGMENT_COLOR = """#version 300 es
+precision mediump float;
+uniform vec4 uColor;
+in vec2 vUv;
+out vec4 fragColor;
+void main() {
+    fragColor = uColor;
 }
 """
 
