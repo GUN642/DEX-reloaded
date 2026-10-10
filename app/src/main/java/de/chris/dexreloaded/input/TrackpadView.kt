@@ -8,6 +8,7 @@ import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.HapticFeedbackConstants
 import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
@@ -59,7 +60,7 @@ class TrackpadView(context: Context) : View(context) {
     private val holdRunnable = Runnable {
         if (!moved && maxPointers == 1) {
             holding = true
-            performHapticFeedback(HAPTIC_LONG_PRESS)
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
             DexController.pointerDown()
             invalidate()
         }
