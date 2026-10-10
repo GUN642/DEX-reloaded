@@ -73,6 +73,14 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     private var yawOffset = 0f
 
+    /** Einrasten statt freiem Folgen (siehe [snapYaw]). */
+    @Volatile
+    var snapMode = false
+
+    private var snapIndex = -1
+    private var snapLook = -1
+    private var snapCurrent = 0f
+
     // ---- Zeiger und Fokus (vom Hauptthread gesetzt) ----
 
     /** Bildschirm mit dem Zeiger, -1 = Zeiger aus. */
@@ -226,8 +234,14 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         var yaw = yawOffset
         var pitch = 0f
         if (headTracking && HeadTracker.compute(head)) {
-            yaw += head[0]
-            pitch = head[1]
+            if (snapMode) {
+                yaw = snapYaw(yawOffsetTarget + head[0])
+            } else {
+                yaw += head[0]
+                pitch = head[1]
+            }
+        } else {
+            snapIndex = -1
         }
         // Kamera nach rechts gedreht heißt Welt nach links: view = Rx(-pitch) * Ry(yaw)
         Matrix.setRotateM(tmp, 0, -pitch, 1f, 0f, 0f)
@@ -258,7 +272,6 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
             drawPanel(panel)
         }
-        drawFocusBorder()
         drawPointer()
         GlUtil.checkError("onDrawFrame")
     }
@@ -271,6 +284,26 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, STRIDE, 12)
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, panel.vertexCount)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+    }
+
+    /**
+     * Einrasten: Das Bild steht still auf einem Bildschirm. Erst wenn der Blick deutlich
+     * (mehr als [SNAP_FACTOR] einer Bildschirmbreite) zur Seite geht, wechselt es sanft
+     * zum Nachbarn. Gibt den anzuzeigenden Gierwinkel zurück.
+     */
+    private fun snapYaw(gazeYaw: Float): Float {
+        val step = panelStepDeg
+        if (snapIndex < 0 || lookIndex != snapLook) {
+            snapIndex = lookIndex
+            snapLook = lookIndex
+            snapCurrent = (snapIndex - (SCREEN_COUNT - 1) / 2f) * step
+        }
+        val center = (snapIndex - (SCREEN_COUNT - 1) / 2f) * step
+        if (gazeYaw > center + step * SNAP_FACTOR && snapIndex < SCREEN_COUNT - 1) snapIndex++
+        else if (gazeYaw < center - step * SNAP_FACTOR && snapIndex > 0) snapIndex--
+        val target = (snapIndex - (SCREEN_COUNT - 1) / 2f) * step
+        snapCurrent += (target - snapCurrent) * 0.2f
+        return snapCurrent
     }
 
     /** Meldet, auf welchen Bildschirm die Blickmitte gerade zeigt. */
@@ -306,30 +339,6 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, dynamicVbo)
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, quad.size * 4, quadBuf, GLES30.GL_DYNAMIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-    }
-
-    /** Dünner roter Rahmen innen am Rand des Bildschirms mit Tastaturfokus, vor der Fläche. */
-    private fun drawFocusBorder() {
-        val i = focusedScreen
-        if (i !in 0 until SCREEN_COUNT || panels[i] == null) return
-        val w = pixelW[i]
-        val h = pixelH[i]
-        val b = BORDER_PX * h / 1080f
-        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
-        GLES30.glUseProgram(programColor)
-        GLES30.glUniform4f(GLES30.glGetUniformLocation(programColor, "uColor"), 0.9f, 0.1f, 0.1f, 1f)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programColor, "uMvp"), 1, false, mvp, 0)
-        val edges = arrayOf(
-            floatArrayOf(0f, 0f, w, b),
-            floatArrayOf(0f, h - b, w, h),
-            floatArrayOf(0f, 0f, b, h),
-            floatArrayOf(w - b, 0f, w, h),
-        )
-        for (e in edges) {
-            fillQuad(i, e[0], e[1], e[2], e[3], 0.998f)
-            drawPanel(Panel(dynamicVbo, 4))
-        }
-        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
     }
 
     /** Mauszeiger als Pfeil, vor der Fläche, ohne Tiefentest. */
@@ -430,8 +439,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
         // Bildschirme grenzen direkt aneinander
         private const val GAP_DEG = 0f
-        private const val BORDER_PX = 2f
         private const val POINTER_PX = 40f
+        private const val SNAP_FACTOR = 0.6f
         private const val STRIDE = 5 * 4
 
         private const val VERTEX_SHADER = """#version 300 es
