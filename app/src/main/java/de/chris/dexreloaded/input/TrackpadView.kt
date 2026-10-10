@@ -377,6 +377,12 @@ class TrackpadView(context: Context) : View(context) {
 
     /** Ohne Pointer Capture kommen Mausräder als generische Bewegung. */
     override fun onGenericMotionEvent(e: MotionEvent): Boolean {
+        // Maus bewegt, aber ohne Zugriff (z. B. nach dem Tippen hat die Brille den Fokus):
+        // Fokus und Pointer Capture sofort zurückholen, ohne dass erst geklickt werden muss.
+        if (e.isFromSource(InputDevice.SOURCE_MOUSE) && !hasPointerCapture()) {
+            if (hasWindowFocus()) requestPointerCapture() else DexController.reclaimFocus()
+            if (e.actionMasked != MotionEvent.ACTION_SCROLL) return true
+        }
         if (e.isFromSource(InputDevice.SOURCE_CLASS_POINTER) && e.actionMasked == MotionEvent.ACTION_SCROLL) {
             DexController.scroll(e.getAxisValue(MotionEvent.AXIS_HSCROLL), e.getAxisValue(MotionEvent.AXIS_VSCROLL))
             return true

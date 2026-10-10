@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -116,10 +117,11 @@ private fun Header(text: String) {
 @Composable
 private fun AppRow(app: AppEntry, onClick: () -> Unit) {
     val context = LocalContext.current
+    val px = with(LocalDensity.current) { 40.dp.roundToPx() }
     val icon by produceState<ImageBitmap?>(initialValue = null, app.packageName) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                context.packageManager.getApplicationIcon(app.packageName).toBitmap(96, 96).asImageBitmap()
+                context.packageManager.getApplicationIcon(app.packageName).toBitmap(px, px).asImageBitmap()
             }.getOrNull()
         }
     }

@@ -56,11 +56,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -359,10 +361,12 @@ private fun AppIcon(
     onLaunched: () -> Unit = {},
 ) {
     val context = LocalContext.current
-    val icon by produceState<ImageBitmap?>(initialValue = null, app.packageName) {
+    // Icon genau in der Anzeigegröße zeichnen, nicht groß laden und grob verkleinern
+    val px = with(LocalDensity.current) { iconSize.dp.roundToPx() }.coerceAtLeast(16)
+    val icon by produceState<ImageBitmap?>(initialValue = null, app.packageName, px) {
         value = withContext(Dispatchers.IO) {
             runCatching {
-                context.packageManager.getApplicationIcon(app.packageName).toBitmap(144, 144).asImageBitmap()
+                context.packageManager.getApplicationIcon(app.packageName).toBitmap(px, px).asImageBitmap()
             }.getOrNull()
         }
     }
@@ -386,7 +390,14 @@ private fun AppIcon(
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(Modifier.size(iconSize.dp)) {
-                icon?.let { Image(it, contentDescription = app.label, modifier = Modifier.size(iconSize.dp)) }
+                icon?.let {
+                    Image(
+                        it,
+                        contentDescription = app.label,
+                        modifier = Modifier.size(iconSize.dp),
+                        filterQuality = FilterQuality.High,
+                    )
+                }
             }
             if (showLabel) {
                 Text(
