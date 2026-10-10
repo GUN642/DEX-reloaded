@@ -114,10 +114,14 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 1. Drei Bildschirme, je ein virtuelles Display (gleiche Größe und Dichte für alle, einstellbar unter „Erweitert“). App pro Bildschirm wird gemerkt (`screenApp0..2`) und beim Anzeigen der Arbeitsfläche wieder gestartet, sobald der Shizuku-Dienst läuft. Zuletzt genutzte Apps (`recentApps`, max. 10) stehen oben in der App-Auswahl.
 2. Eingabe im Dienst (`IDexService`, oneway): `injectTouch` (Finger, DOWN/MOVE/UP), `injectScroll` (Maus, ACTION_SCROLL), `injectKey`. `HiddenApi.inject` nutzt `InputManagerGlobal` (ab Android 14) bzw. `InputManager`, Display-ID per `InputEvent.setDisplayId`.
 3. Klicks werden als Berührung eingespeist, nicht als Maus. Das verstehen alle Apps, Ziehen scrollt Listen. Rechte Maustaste und Zwei-Finger-Tippen sind Zurück.
-4. Zeiger: eigene Koordinaten (Bildschirm 0..2, Pixel im virtuellen Display), geht über die Ränder in den Nachbarn. Der Renderer zeichnet einen Pfeil davor und einen dünnen roten Rahmen (2 px, innen, vor der Fläche) um den Bildschirm mit Fokus. Fokus wechselt beim Klicken und mit dem Blick.
+4. Zeiger: eigene Koordinaten (Bildschirm 0..2, Pixel im virtuellen Display), geht über die Ränder in den Nachbarn. Der Renderer zeichnet einen Pfeil davor. Ab 0.4.1 wird der Bildschirm mit Fokus nicht mehr markiert (Wunsch von Chris). Fokus wechselt beim Klicken und mit dem Blick.
 5. „Zeiger folgt Blick“ (Standard an): Schaut man auf einen anderen Bildschirm, springt der Zeiger in dessen Mitte und der Fokus wechselt.
 6. Trackpad ist ein Vollbild-Modus **in** `MainActivity` (keine eigene Activity), damit die Presentation sichtbar bleibt. `input/TrackpadView`: ein Finger bewegt, Tippen klickt, ruhig halten dann ziehen (langes Drücken), zwei Finger scrollen, drei Finger wischen wechselt den Bildschirm. Bluetooth-Maus per Pointer Capture. Bildschirm bleibt an, „Dunkel“ dimmt das Handy.
 7. Bluetooth-Tastatur: `MainActivity.dispatchKeyEvent` leitet bei offenem Trackpad Tasten von echten Geräten an den fokussierten Bildschirm. Kürzel: Strg+Alt+Links/Rechts (Bildschirm wechseln), Strg+Alt+1/2/3, Strg+Alt+C (zentrieren).
+
+## Einrasten (ab 0.4.1)
+
+Option „Einrasten“ in der Karte Kopf-Tracking, Standard aus. Das Bild steht still auf einem Bildschirm (kein Nicken, kein Gieren), wie ohne Kopf-Tracking. Geht der Blick mehr als 0,6 Bildschirmbreiten von dessen Mitte weg, gleitet die Ansicht zum Nachbarn. Rückweg ebenso, dadurch eingebaute Hysterese. Umsetzung `WorkspaceRenderer.snapYaw`.
 
 ## Startbildschirm (ab 0.4.0)
 
@@ -131,4 +135,4 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 
 ## Stand
 
-Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). Gerätetest 0.3.0: Trackpad gut, etwas zu empfindlich, Halten und Ziehen geht. Maus und Tastatur noch ungetestet. 0.3.1: Bildschirme ohne Lücke, Fokusrahmen dünn und rot, Zeigergeschwindigkeit für Trackpad und Maus einstellbar (Standard Trackpad 1,6, Maus 1,3), Knopf „Tastatur“ im Trackpad. 0.4.0: Startbildschirm, wartet auf Gerätetest. Maus und Tastatur weiter ungetestet.
+Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). Gerätetest 0.3.0: Trackpad gut, etwas zu empfindlich, Halten und Ziehen geht. Maus und Tastatur noch ungetestet. 0.3.1: Bildschirme ohne Lücke, Fokusrahmen dünn und rot, Zeigergeschwindigkeit für Trackpad und Maus einstellbar (Standard Trackpad 1,6, Maus 1,3), Knopf „Tastatur“ im Trackpad. Gerätetest 0.4.0: alles läuft. 0.4.1: Fokusrahmen entfernt, Option „Einrasten“. Maus und Tastatur weiter ungetestet.

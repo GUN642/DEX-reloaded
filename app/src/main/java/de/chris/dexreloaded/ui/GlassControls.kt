@@ -107,6 +107,19 @@ fun HeadTrackingCard() {
             )
         }
         if (!settings.headTracking) return@Section
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Einrasten")
+                Text(
+                    "Bild bleibt ruhig stehen. Erst bei deutlichem Blick zur Seite wechselt es zum Nachbarbildschirm.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(
+                checked = settings.snapMode,
+                onCheckedChange = { on -> DexController.updateViewSettings { it.copy(snapMode = on) } },
+            )
+        }
         if (!shown) {
             Text("Startet mit der Arbeitsfläche.", style = MaterialTheme.typography.bodySmall)
             return@Section

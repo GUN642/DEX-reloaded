@@ -82,6 +82,7 @@ object DexController {
         val headTracking: Boolean = true,
         val diagonalFov: Float = 50f,
         val size: Float = 1f,
+        val snapMode: Boolean = false,
     )
 
     private val _viewSettings = MutableStateFlow(ViewSettings())
@@ -155,6 +156,7 @@ object DexController {
             headTracking = prefs.getBoolean("headTracking", true),
             diagonalFov = prefs.getFloat("diagonalFov", 50f),
             size = prefs.getFloat("size", 1f),
+            snapMode = prefs.getBoolean("snapMode", false),
         )
         applyViewSettings()
         _screenConfig.value = ScreenConfig(
@@ -291,6 +293,7 @@ object DexController {
             .putBoolean("headTracking", v.headTracking)
             .putFloat("diagonalFov", v.diagonalFov)
             .putFloat("size", v.size)
+            .putBoolean("snapMode", v.snapMode)
             .apply()
         applyViewSettings()
     }
@@ -300,6 +303,7 @@ object DexController {
         renderer.headTracking = v.headTracking
         renderer.diagonalFov = v.diagonalFov
         renderer.size = v.size
+        renderer.snapMode = v.snapMode
         if (presentation != null) {
             if (v.headTracking) VitureImu.start() else VitureImu.stop()
         }
