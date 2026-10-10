@@ -504,6 +504,11 @@ object DexController {
             }
             val (cw, _) = screenSize(pointerScreen)
             pointerX = pointerX.coerceIn(0f, cw - 1f)
+            // Ohne Kopf-Tracking dreht die Ansicht mit, wenn der Zeiger den Bildschirm wechselt
+            if (!_viewSettings.value.headTracking && pointerScreen != _lookIndex.value) {
+                _lookIndex.value = pointerScreen
+                renderer.lookAt(pointerScreen)
+            }
         }
         syncPointer()
     }
