@@ -96,6 +96,7 @@ private fun AdvancedConfig() {
     var height by remember(config) { mutableStateOf(config.height.toString()) }
     var dpi by remember(config) { mutableStateOf(config.dpi.toString()) }
     var forceStop by remember(config) { mutableStateOf(config.forceStop) }
+    var keepFocus by remember(config) { mutableStateOf(config.keepPhoneFocus) }
 
     Text(
         "Gilt für neu angelegte Bildschirme. Danach die App auf dem Bildschirm neu wählen.",
@@ -110,13 +111,17 @@ private fun AdvancedConfig() {
         Checkbox(checked = forceStop, onCheckedChange = { forceStop = it })
         Text("App vorher beenden (falls sie schon auf dem Handy läuft)")
     }
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = keepFocus, onCheckedChange = { keepFocus = it })
+        Text("Fokus fest am Handy (Variante aus 0.4.2, Klicks gingen damit nicht)")
+    }
     val w = width.toIntOrNull()
     val h = height.toIntOrNull()
     val d = dpi.toIntOrNull()
     val valid = w != null && h != null && d != null && w in 320..4096 && h in 240..4096 && d in 72..640
     OutlinedButton(
         enabled = valid,
-        onClick = { DexController.updateScreenConfig(DexController.ScreenConfig(w!!, h!!, d!!, forceStop)) },
+        onClick = { DexController.updateScreenConfig(DexController.ScreenConfig(w!!, h!!, d!!, forceStop, keepFocus)) },
     ) { Text("Übernehmen") }
 }
 

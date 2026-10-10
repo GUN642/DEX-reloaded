@@ -133,15 +133,50 @@ object HiddenApi {
         InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
     }
 
+    @Volatile var injectOk = 0L
+    @Volatile var injectFailed = 0L
+    @Volatile var lastInjectError: String? = null
+    @Volatile var lastFocusResult: String? = null
+
     /** Speist ein Eingabeereignis auf dem Display [displayId] ein. */
     fun inject(event: InputEvent, displayId: Int): Boolean {
-        return try {
+        val ok = try {
             setDisplayIdMethod.invoke(event, displayId)
-            val im = inputManager ?: return false
-            injectMethod?.invoke(im, event, INJECT_MODE_ASYNC) as? Boolean ?: false
+            val im = inputManager
+            if (im == null) {
+                lastInjectError = "kein InputManager"
+                false
+            } else {
+                injectMethod?.invoke(im, event, INJECT_MODE_ASYNC) as? Boolean ?: false
+            }
         } catch (e: Throwable) {
             Log.w(TAG, "injectInputEvent fehlgeschlagen", e)
+            lastInjectError = (e.cause ?: e).toString()
             false
+        }
+        if (ok) injectOk++ else injectFailed++
+        return ok
+    }
+
+    /**
+     * Holt den Systemfokus auf [displayId]. Erst IActivityTaskManager.focusTopTask,
+     * sonst IWindowManager.moveDisplayToTopIfAllowed.
+     */
+    @SuppressLint("PrivateApi")
+    fun focusDisplay(displayId: Int) {
+        lastFocusResult = try {
+            val atm = Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)
+            atm!!.javaClass.getMethod("focusTopTask", Int::class.javaPrimitiveType).invoke(atm, displayId)
+            "focusTopTask ok"
+        } catch (e: Throwable) {
+            val first = (e.cause ?: e).toString()
+            try {
+                val wm = Class.forName("android.view.WindowManagerGlobal").getMethod("getWindowManagerService").invoke(null)
+                wm!!.javaClass.getMethod("moveDisplayToTopIfAllowed", Int::class.javaPrimitiveType).invoke(wm, displayId)
+                "moveDisplayToTopIfAllowed ok (focusTopTask: $first)"
+            } catch (e2: Throwable) {
+                "fehlgeschlagen: $first / ${(e2.cause ?: e2)}"
+            }
         }
     }
 
@@ -156,12 +191,13 @@ object HiddenApi {
         height: Int,
         dpi: Int,
         surface: Surface,
+        keepPhoneFocus: Boolean,
     ): VirtualDisplay {
         val dm = displayManager(base)
         // Ab Android 14: Klicks auf dem virtuellen Display holen den Systemfokus nicht vom Handy weg.
         // Sonst verliert die Handy-App den Fokus und damit den Mauszugriff (Pointer Capture).
         val candidates = buildList {
-            if (Build.VERSION.SDK_INT >= 34) add(FULL_FLAGS or VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED)
+            if (keepPhoneFocus && Build.VERSION.SDK_INT >= 34) add(FULL_FLAGS or VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED)
             add(FULL_FLAGS)
             add(BASE_FLAGS)
         }
