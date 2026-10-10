@@ -180,6 +180,53 @@ object HiddenApi {
         }
     }
 
+    private fun taskManager(): Any =
+        Class.forName("android.app.ActivityTaskManager").getMethod("getService").invoke(null)!!
+
+    /**
+     * Laufende Aufgaben aller Displays, neueste zuerst. Eine Zeile pro Aufgabe:
+     * taskId|displayId|Basis-Komponente|Paket oben|zuletzt aktiv. Braucht REAL_GET_TASKS (hat die Shell).
+     */
+    @SuppressLint("PrivateApi")
+    fun getTasks(): List<String> = try {
+        val atm = taskManager()
+        val m = atm.javaClass.methods.first { it.name == "getTasks" }
+        var ints = 0
+        val args = m.parameterTypes.map { t ->
+            when (t) {
+                Int::class.javaPrimitiveType -> if (ints++ == 0) 100 else -1
+                Boolean::class.javaPrimitiveType -> false
+                else -> null
+            }
+        }.toTypedArray()
+        val list = m.invoke(atm, *args) as List<*>
+        list.mapNotNull { t ->
+            if (t == null) return@mapNotNull null
+            fun field(name: String): Any? = runCatching { t.javaClass.getField(name).get(t) }.getOrNull()
+            val id = field("taskId") as? Int ?: return@mapNotNull null
+            val display = field("displayId") as? Int ?: -1
+            val base = (field("baseIntent") as? android.content.Intent)?.component
+                ?: field("baseActivity") as? android.content.ComponentName
+            val top = field("topActivity") as? android.content.ComponentName
+            val last = field("lastActiveTime") as? Long ?: 0L
+            "$id|$display|${base?.flattenToString() ?: ""}|${top?.packageName ?: ""}|$last"
+        }
+    } catch (e: Throwable) {
+        Log.w(TAG, "getTasks fehlgeschlagen", e)
+        listOf("FEHLER|${(e.cause ?: e)}")
+    }
+
+    /** Aufgabe nach vorn holen. Gibt null zurück, wenn es geklappt hat, sonst den Fehler. */
+    @SuppressLint("PrivateApi")
+    fun moveTaskToFront(taskId: Int): String? = try {
+        val atm = taskManager()
+        val m = atm.javaClass.methods.first { it.name == "moveTaskToFront" && it.parameterTypes.size == 5 }
+        m.invoke(atm, null, "com.android.shell", taskId, 0, null)
+        null
+    } catch (e: Throwable) {
+        (e.cause ?: e).toString()
+    }
+
     /**
      * Legt ein virtuelles Display an. Versucht erst alle Flags wie scrcpy,
      * bei fehlenden Rechten nur die Grundflags.

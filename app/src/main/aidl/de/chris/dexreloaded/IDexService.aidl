@@ -47,4 +47,13 @@ interface IDexService {
     String stopRecording() = 13;
 
     boolean isRecording() = 14;
+
+    // Bildschirmfoto des Displays (Brille) per screencap als PNG. Gibt "ok" oder einen Fehler zurück.
+    String takeScreenshot(int displayId, String path) = 15;
+
+    // Laufende Aufgaben, eine pro Zeile: taskId|displayId|Paket/Klasse der Basis|Paket oben|zuletzt aktiv
+    String getTasks() = 16;
+
+    // Aufgabe nach vorn holen. Ohne Recht dafür per am start mit der Basis-Activity auf dem Display.
+    String moveTaskToFront(int taskId, String component, int displayId) = 17;
 }

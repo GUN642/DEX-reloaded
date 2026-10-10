@@ -14,6 +14,9 @@ object TestPattern {
         Color.rgb(0x1E, 0x3A, 0x5F),
         Color.rgb(0x1F, 0x4D, 0x3A),
         Color.rgb(0x5A, 0x2A, 0x4A),
+        Color.rgb(0x4A, 0x3F, 0x1E),
+        Color.rgb(0x2A, 0x2F, 0x5A),
+        Color.rgb(0x1E, 0x4A, 0x4A),
     )
 
     fun create(index: Int, width: Int = 1280, height: Int = 720): Bitmap {
@@ -51,11 +54,11 @@ object TestPattern {
 
         val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = height / 7f
+            textSize = if (ScreenLayout.name(index).length > 12) height / 11f else height / 7f
             typeface = Typeface.DEFAULT_BOLD
             textAlign = Paint.Align.CENTER
         }
-        c.drawText("Bildschirm ${index + 1}", width / 2f, height / 2f + title.textSize / 3f, title)
+        c.drawText(ScreenLayout.name(index), width / 2f, height / 2f + title.textSize / 3f, title)
 
         val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.argb(200, 255, 255, 255)

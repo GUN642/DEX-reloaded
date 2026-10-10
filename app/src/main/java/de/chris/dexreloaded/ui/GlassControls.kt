@@ -3,6 +3,8 @@ package de.chris.dexreloaded.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
@@ -27,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import de.chris.dexreloaded.DexController
 import de.chris.dexreloaded.imu.HeadTracker
 import de.chris.dexreloaded.imu.VitureImu
+import de.chris.dexreloaded.render.ScreenLayout
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -36,6 +39,9 @@ fun GlassCard(onShowPresentation: () -> Unit) {
     val shown by DexController.presentationShown.collectAsState()
     val look by DexController.lookIndex.collectAsState()
     val settings by DexController.viewSettings.collectAsState()
+    val extras by DexController.extraScreens.collectAsState()
+    val wide by DexController.wideMode.collectAsState()
+    val cinema by DexController.cinema.collectAsState()
     Section("Brille") {
         val g = glass
         if (g == null) {
@@ -55,15 +61,40 @@ fun GlassCard(onShowPresentation: () -> Unit) {
         } else {
             Button(onClick = onShowPresentation) { Text("Arbeitsfläche anzeigen") }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text("Blick auf:")
-            for (i in 0..2) {
+            for (i in ScreenLayout.sorted(if (wide) ScreenLayout.BASE else ScreenLayout.BASE + extras)) {
                 FilterChip(
                     selected = look == i,
                     onClick = { DexController.lookAt(i) },
-                    label = { Text("${i + 1}") },
+                    label = { Text(ScreenLayout.shortName(i)) },
                 )
             }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Kinomodus")
+                Text(
+                    if (wide) "Nur ohne Breitbild. Im Breitbild ein Fenster maximieren."
+                    else "Ein großer Bildschirm, fest im Raum. Zeigt den Bildschirm, auf den du gerade schaust. Mit ◀ ▶ wechseln.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(checked = cinema, enabled = !wide, onCheckedChange = { DexController.setCinema(it) })
+        }
+        if (cinema && !wide) {
+            var cs by remember(settings.cinemaSize) { mutableFloatStateOf(settings.cinemaSize) }
+            Text("Größe im Kino: ${(cs * 100).roundToInt()} %")
+            Slider(
+                value = cs,
+                onValueChange = { cs = (it * 20).roundToInt() / 20f },
+                onValueChangeFinished = { DexController.updateViewSettings { s -> s.copy(cinemaSize = cs) } },
+                valueRange = 0.5f..1.5f,
+            )
         }
 
         var size by remember(settings.size) { mutableFloatStateOf(settings.size) }

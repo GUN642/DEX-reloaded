@@ -9,7 +9,7 @@ import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.BG_ID
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.RESIZE_PX
-import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.SCREEN_COUNT
+import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.WIDE_PANELS
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.TITLE_PX
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.WINDOW_ID_BASE
 import de.chris.dexreloaded.shizuku.ShizukuManager
@@ -74,7 +74,7 @@ object WideDesk {
     /** Ein Fenster wird gerade verschoben, vergrößert oder darin gezogen. */
     val dragging get() = drag != null
 
-    val canvasW get() = panelW * SCREEN_COUNT
+    val canvasW get() = panelW * WIDE_PANELS
 
     fun init(context: Context, r: WorkspaceRenderer, logger: (String) -> Unit) {
         appContext = context.applicationContext
@@ -175,7 +175,7 @@ object WideDesk {
         val w = minOf(DEFAULT_W, panelW - 80f)
         val h = minOf(DEFAULT_H, panelH - TITLE_PX - 80f)
         val cascade = (wins.size % 5) * 40f
-        val x = panel.coerceIn(0, SCREEN_COUNT - 1) * panelW + (panelW - w) / 2f + cascade
+        val x = panel.coerceIn(0, WIDE_PANELS - 1) * panelW + (panelW - w) / 2f + cascade
         val y = TITLE_PX + (panelH - TITLE_PX - h) / 2f + cascade
         val win = Win(nextId++, app, x, y, w, h)
         wins.add(win)
@@ -219,7 +219,7 @@ object WideDesk {
         val r = win.restore
         if (r == null) {
             win.restore = floatArrayOf(win.x, win.y, win.w, win.h)
-            val panel = ((win.x + win.w / 2f) / panelW).toInt().coerceIn(0, SCREEN_COUNT - 1)
+            val panel = ((win.x + win.w / 2f) / panelW).toInt().coerceIn(0, WIDE_PANELS - 1)
             win.x = panel * panelW
             win.y = TITLE_PX
             win.w = panelW
@@ -248,6 +248,26 @@ object WideDesk {
 
     fun focusBackground() {
         focusedWin = null
+    }
+
+    /** Displays der Fenster und des Startbildschirms. */
+    fun displayIds(): Set<Int> = (wins.map { it.displayId } + bgDisplayId).filter { it >= 0 }.toSet()
+
+    /** Apps der Fenster, vorderstes zuerst. */
+    fun windowApps(): List<AppEntry> = wins.reversed().map { it.app }
+
+    /** Fenster der App [packageName] nach vorn holen. Gibt false zurück, wenn es keins gibt. */
+    fun bringToFront(packageName: String): Boolean {
+        val win = wins.lastOrNull { it.app.packageName == packageName } ?: return false
+        bringToFront(win)
+        return true
+    }
+
+    /** Zwischen den beiden vordersten Fenstern wechseln. */
+    fun switchToPrevious() {
+        if (wins.size >= 2) bringToFront(wins[wins.size - 2])
+        else if (wins.size == 1 && focusedWin == null) bringToFront(wins[0])
+        else focusBackground()
     }
 
     /** Display, das Tastatureingaben bekommt. */

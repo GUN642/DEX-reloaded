@@ -84,6 +84,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import de.chris.dexreloaded.DexController
 import de.chris.dexreloaded.imu.VitureImu
+import de.chris.dexreloaded.render.ScreenLayout
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
 import de.chris.dexreloaded.ui.Apps
@@ -109,7 +110,7 @@ class HomeActivity : ComponentActivity() {
         setContent { DexTheme { HomeScreen(myScreen()) } }
     }
 
-    /** Bildschirm (0..2), auf dem dieser Startbildschirm läuft. */
+    /** Bildschirm, auf dem dieser Startbildschirm läuft. */
     private fun myScreen(): () -> Int = {
         val id = display?.displayId
         DexController.slots.value.entries.firstOrNull { it.value.displayId == id }?.key ?: 1
@@ -379,7 +380,22 @@ private fun Dock(screen: () -> Int, drawerOpen: Boolean, onToggleDrawer: () -> U
                     modifier = Modifier.padding(horizontal = 8.dp),
                 )
             }
-            for (app in dock) AppIcon(app, screen, iconSize = 48, showLabel = false)
+            val running by DexController.runningApps.collectAsState()
+            val runningPkgs = running.map { it.packageName }.toSet()
+            for (app in dock) {
+                AppIcon(app, screen, iconSize = 48, showLabel = false, running = app.packageName in runningPkgs, taskbar = true)
+            }
+            // Laufende Apps, die nicht angeheftet sind, wie in einer Taskleiste dahinter
+            val others = running.filter { r -> dock.none { it.packageName == r.packageName } }
+            if (others.isNotEmpty()) {
+                Box(
+                    Modifier
+                        .width(1.dp)
+                        .height(40.dp)
+                        .background(Color(0x55FFFFFF)),
+                )
+                for (app in others) AppIcon(app, screen, iconSize = 48, showLabel = false, running = true, taskbar = true)
+            }
             Box(
                 Modifier
                     .size(48.dp)
@@ -451,6 +467,8 @@ private fun AppIcon(
     iconSize: Int,
     showLabel: Boolean,
     onLaunched: () -> Unit = {},
+    running: Boolean = false,
+    taskbar: Boolean = false,
 ) {
     val context = LocalContext.current
     // Icon genau in der Anzeigegröße zeichnen, nicht groß laden und grob verkleinern
@@ -476,7 +494,13 @@ private fun AppIcon(
         Column(
             Modifier
                 .clip(RoundedCornerShape(14.dp))
-                .combinedClickable(onClick = { open(screen()) }, onLongClick = { menu = true })
+                .combinedClickable(
+                    onClick = {
+                        // Im Dock: läuft die App schon, dorthin wechseln
+                        if (taskbar) DexController.activateApp(app, screen()) else open(screen())
+                    },
+                    onLongClick = { menu = true },
+                )
                 .padding(4.dp)
                 .width((iconSize + 30).dp),
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -490,6 +514,15 @@ private fun AppIcon(
                         filterQuality = FilterQuality.High,
                     )
                 }
+            }
+            if (taskbar) {
+                Box(
+                    Modifier
+                        .padding(top = 3.dp)
+                        .size(6.dp)
+                        .clip(RoundedCornerShape(50))
+                        .background(if (running) Color.White else Color.Transparent),
+                )
             }
             if (showLabel) {
                 Text(
@@ -509,9 +542,9 @@ private fun AppIcon(
                 style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
             )
-            for (i in 0..2) {
+            for (i in ScreenLayout.sorted(DexController.activeScreens())) {
                 val here = if (i == screen()) " (hier)" else ""
-                DropdownMenuItem(text = { Text("Auf Bildschirm ${i + 1} öffnen$here") }, onClick = { open(i) })
+                DropdownMenuItem(text = { Text("Auf ${ScreenLayout.name(i)} öffnen$here") }, onClick = { open(i) })
             }
             if (pinned) {
                 val idx = dock.indexOfFirst { it.component == app.component }

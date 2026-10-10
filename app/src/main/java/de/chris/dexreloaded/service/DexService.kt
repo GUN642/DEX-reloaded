@@ -240,6 +240,21 @@ class DexService() : IDexService.Stub() {
 
     override fun isRecording(): Boolean = recording
 
+    override fun takeScreenshot(displayId: Int, path: String): String {
+        java.io.File(path).parentFile?.mkdirs()
+        val target = physicalDisplayId(displayId)
+        val out = exec(listOf("/system/bin/screencap", "-d", target, "-p", path))
+        return if (java.io.File(path).length() > 0) "ok" else out.trim()
+    }
+
+    override fun getTasks(): String = HiddenApi.getTasks().joinToString("\n")
+
+    override fun moveTaskToFront(taskId: Int, component: String, displayId: Int): String {
+        val err = HiddenApi.moveTaskToFront(taskId) ?: return "ok"
+        if (component.isBlank()) return err
+        return launchApp(component, displayId, false)
+    }
+
     override fun focusDisplay(displayId: Int) {
         HiddenApi.focusDisplay(displayId)
     }

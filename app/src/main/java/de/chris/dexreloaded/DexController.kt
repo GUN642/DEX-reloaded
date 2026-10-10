@@ -13,12 +13,15 @@ import android.view.Display
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
+import androidx.core.graphics.drawable.toBitmap
 import de.chris.dexreloaded.desk.WideDesk
 import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.imu.HeadTracker
 import de.chris.dexreloaded.imu.VitureImu
 import de.chris.dexreloaded.render.GlassPresentation
 import de.chris.dexreloaded.render.NavBar
+import de.chris.dexreloaded.render.OverlayBitmaps
+import de.chris.dexreloaded.render.ScreenLayout
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
@@ -86,12 +89,13 @@ object DexController {
         val diagonalFov: Float = 50f,
         val size: Float = 1f,
         val snapMode: Boolean = false,
+        val cinemaSize: Float = 0.85f,
     )
 
     private val _viewSettings = MutableStateFlow(ViewSettings())
     val viewSettings: StateFlow<ViewSettings> = _viewSettings.asStateFlow()
 
-    /** Bildschirm, auf den zuletzt per Knopf geschaut wurde (0..2). */
+    /** Bildschirm, auf den zuletzt per Knopf geschaut wurde. */
     private val _lookIndex = MutableStateFlow(1)
     val lookIndex: StateFlow<Int> = _lookIndex.asStateFlow()
 
@@ -116,7 +120,7 @@ object DexController {
     private val _recentApps = MutableStateFlow<List<AppEntry>>(emptyList())
     val recentApps: StateFlow<List<AppEntry>> = _recentApps.asStateFlow()
 
-    /** Bildschirm mit Tastaturfokus (0..2). */
+    /** Bildschirm mit Tastaturfokus. */
     private val _focusedScreen = MutableStateFlow(1)
     val focusedScreen: StateFlow<Int> = _focusedScreen.asStateFlow()
 
@@ -140,6 +144,19 @@ object DexController {
     val wideMode: StateFlow<Boolean> = _wideMode.asStateFlow()
 
     private val wide get() = _wideMode.value
+
+    /** Zugeschaltete Bildschirme über 0, 1, 2 hinaus (oben, links außen, rechts außen). */
+    private val _extraScreens = MutableStateFlow<Set<Int>>(emptySet())
+    val extraScreens: StateFlow<Set<Int>> = _extraScreens.asStateFlow()
+
+    /** Aktive Bildschirme. Im Breitbild nur die drei der Grundreihe. */
+    fun activeScreens(): Set<Int> = if (wide) ScreenLayout.BASE else ScreenLayout.BASE + _extraScreens.value
+
+    /** Kinomodus: ein großer Bildschirm, fest im Raum (nur ohne Breitbild). */
+    private val _cinema = MutableStateFlow(false)
+    val cinema: StateFlow<Boolean> = _cinema.asStateFlow()
+
+    private val cinemaActive get() = _cinema.value && !wide
 
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
@@ -179,7 +196,10 @@ object DexController {
             diagonalFov = prefs.getFloat("diagonalFov", 50f),
             size = prefs.getFloat("size", 1f),
             snapMode = prefs.getBoolean("snapMode", false),
+            cinemaSize = prefs.getFloat("cinemaSize", 0.85f),
         )
+        _extraScreens.value = ScreenLayout.EXTRAS.filter { prefs.getBoolean("extraScreen$it", false) }.toSet()
+        _cinema.value = prefs.getBoolean("cinema", false)
         applyViewSettings()
         _screenConfig.value = ScreenConfig(
             width = prefs.getInt("width", 1920),
@@ -206,6 +226,7 @@ object DexController {
         VitureImu.init(appContext)
         HeadTracker.init(appContext)
         _wideMode.value = prefs.getBoolean("wideMode", false)
+        applyLayout()
         WideDesk.init(appContext, renderer, ::log)
         ShizukuManager.onServiceLost = {
             main.post {
@@ -291,6 +312,8 @@ object DexController {
             log("Arbeitsfläche auf ${display.name} gestartet")
             resetPointer(_lookIndex.value)
             restoreScreens()
+            main.removeCallbacks(taskPoll)
+            main.postDelayed(taskPoll, 1500)
         } catch (e: Exception) {
             log("Presentation fehlgeschlagen: $e")
         }
@@ -304,6 +327,11 @@ object DexController {
 
     private fun presentationClosed() {
         if (_recording.value) toggleRecording()
+        hideToast()
+        switcherClose(commit = false)
+        main.removeCallbacks(taskPoll)
+        _tasks.value = emptyList()
+        _runningApps.value = emptyList()
         presentation = null
         renderer.pointerScreen = -1
         VitureImu.stop()
@@ -322,6 +350,7 @@ object DexController {
             .putFloat("diagonalFov", v.diagonalFov)
             .putFloat("size", v.size)
             .putBoolean("snapMode", v.snapMode)
+            .putFloat("cinemaSize", v.cinemaSize)
             .apply()
         applyViewSettings()
     }
@@ -332,21 +361,66 @@ object DexController {
         renderer.diagonalFov = v.diagonalFov
         renderer.size = v.size
         renderer.snapMode = v.snapMode
+        renderer.cinemaSize = v.cinemaSize
         if (presentation != null) {
             if (v.headTracking) VitureImu.start() else VitureImu.stop()
         }
     }
 
-    /** Dreht die Ansicht auf Bildschirm [index] und zentriert den Kopf dorthin. */
+    /** Dreht die Ansicht auf Bildschirm [index] und zentriert den Kopf dorthin. Im Kino: zeigt diesen Bildschirm. */
     fun lookAt(index: Int) {
-        val i = index.coerceIn(0, WorkspaceRenderer.SCREEN_COUNT - 1)
-        _lookIndex.value = i
-        renderer.lookAt(i)
+        if (index !in activeScreens()) return
+        _lookIndex.value = index
+        renderer.lookAt(index)
+        if (cinemaActive) renderer.cinemaScreen = index
         HeadTracker.recenter()
-        if (dragScreen < 0) resetPointer(i)
+        if (dragScreen < 0) resetPointer(index)
     }
 
-    fun lookRelative(delta: Int) = lookAt(_lookIndex.value + delta)
+    /** Nach links (-1) oder rechts (+1). Im Kino der Reihe nach durch alle Bildschirme. */
+    fun lookRelative(delta: Int) {
+        val cur = _lookIndex.value
+        val active = activeScreens()
+        val next = if (cinemaActive) {
+            val list = ScreenLayout.sorted(active)
+            list.getOrNull(list.indexOf(cur) + delta)
+        } else {
+            ScreenLayout.neighbor(cur, delta, 0, active)
+                ?: if (ScreenLayout.row(cur) != 0) ScreenLayout.neighbor(cur, delta, -ScreenLayout.row(cur), active) else null
+        }
+        if (next != null) lookAt(next)
+    }
+
+    /** Nach oben (+1) oder unten (-1). */
+    fun lookVertical(delta: Int) {
+        ScreenLayout.neighbor(_lookIndex.value, 0, delta, activeScreens())?.let { lookAt(it) }
+    }
+
+    /** Bildschirm oben, links außen oder rechts außen zu- oder abschalten. */
+    fun setExtraScreen(index: Int, on: Boolean) {
+        _extraScreens.update { if (on) it + index else it - index }
+        prefs.edit().putBoolean("extraScreen$index", on).apply()
+        applyLayout()
+        if (on) restoreScreens() else releaseScreen(index)
+    }
+
+    fun setCinema(on: Boolean) {
+        _cinema.value = on
+        prefs.edit().putBoolean("cinema", on).apply()
+        applyLayout()
+    }
+
+    /** Aktive Bildschirme und Kino an den Renderer geben, Blick und Zeiger auf gültige Bildschirme. */
+    private fun applyLayout() {
+        val active = activeScreens()
+        renderer.activeScreens = active
+        if (_lookIndex.value !in active) {
+            _lookIndex.value = 1
+            renderer.lookAt(1)
+        }
+        renderer.cinemaScreen = if (cinemaActive) _lookIndex.value else -1
+        if (pointerScreen !in active || (cinemaActive && pointerScreen != _lookIndex.value)) resetPointer(_lookIndex.value)
+    }
 
     fun recenter() {
         HeadTracker.recenter()
@@ -444,6 +518,7 @@ object DexController {
         if (on == wide) return
         _wideMode.value = on
         prefs.edit().putBoolean("wideMode", on).apply()
+        applyLayout()
         if (presentation == null) return
         if (on) {
             releaseAllScreens()
@@ -535,8 +610,9 @@ object DexController {
             WideDesk.start(c.width, c.height, c.dpi, c.keepPhoneFocus)
             return
         }
+        val active = activeScreens()
         for ((index, app) in _screenApps.value) {
-            if (_slots.value[index] == null && index !in pending) {
+            if (index in active && _slots.value[index] == null && index !in pending) {
                 launchOnScreen(index, app.component, c.width, c.height, c.dpi, false)
             }
         }
@@ -544,7 +620,7 @@ object DexController {
 
     private fun saveApps() {
         val e = prefs.edit()
-        for (i in 0 until WorkspaceRenderer.SCREEN_COUNT) {
+        for (i in 0 until ScreenLayout.MAX) {
             val a = _screenApps.value[i]
             if (a == null) e.remove("screenApp$i") else e.putString("screenApp$i", encode(a))
         }
@@ -554,7 +630,7 @@ object DexController {
 
     private fun loadApps() {
         val apps = mutableMapOf<Int, AppEntry>()
-        for (i in 0 until WorkspaceRenderer.SCREEN_COUNT) {
+        for (i in 0 until ScreenLayout.MAX) {
             prefs.getString("screenApp$i", null)?.let { decode(it) }?.let { apps[i] = it }
         }
         // Übernahme aus 0.1/0.2: dort gab es nur eine App für Bildschirm 2
@@ -633,36 +709,59 @@ object DexController {
     }
 
     private fun onGazeScreen(i: Int) {
-        if (!_gazeFollow.value || dragScreen >= 0 || WideDesk.dragging || i == pointerScreen) return
+        gazeScreen = i
+        if (cinemaActive || !_gazeFollow.value || dragScreen >= 0 || WideDesk.dragging || i == pointerScreen) return
         resetPointer(i)
     }
+
+    /** Bildschirm, auf den die Blickmitte zeigt (vom Renderer gemeldet). */
+    private var gazeScreen = 1
 
     /** Relative Bewegung in Pixeln der Bildschirme. */
     fun movePointer(dx: Float, dy: Float) {
         val (w, h) = screenSize(pointerScreen)
-        pointerY = (pointerY + dy).coerceIn(0f, h - 1f)
         pointerX += dx
+        pointerY += dy
         if (dragScreen >= 0) {
             // Beim Ziehen bleibt der Zeiger auf seinem Bildschirm
             pointerX = pointerX.coerceIn(0f, w - 1f)
+            pointerY = pointerY.coerceIn(0f, h - 1f)
             _slots.value[dragScreen]?.let { slot ->
                 ShizukuManager.service.value?.injectTouch(slot.displayId, MotionEvent.ACTION_MOVE, pointerX, pointerY, dragDownTime)
             }
         } else {
-            val last = WorkspaceRenderer.SCREEN_COUNT - 1
-            if (pointerX < 0f && pointerScreen > 0) {
-                pointerScreen--
-                val (nw, nh) = screenSize(pointerScreen)
-                pointerX += nw
-                pointerY = pointerY.coerceIn(0f, nh - 1f)
-            } else if (pointerX >= w && pointerScreen < last) {
-                pointerX -= w
-                pointerScreen++
-                val (_, nh) = screenSize(pointerScreen)
-                pointerY = pointerY.coerceIn(0f, nh - 1f)
+            // Über die Ränder in den Nachbarn (nicht im Kino)
+            val active = if (cinemaActive) emptySet() else activeScreens()
+            if (pointerX < 0f) {
+                ScreenLayout.neighbor(pointerScreen, -1, 0, active)?.let { n ->
+                    val (nw, _) = screenSize(n)
+                    pointerScreen = n
+                    pointerX += nw
+                }
+            } else if (pointerX >= w) {
+                ScreenLayout.neighbor(pointerScreen, 1, 0, active)?.let { n ->
+                    pointerScreen = n
+                    pointerX -= w
+                }
             }
-            val (cw, _) = screenSize(pointerScreen)
+            if (pointerY < 0f) {
+                ScreenLayout.neighbor(pointerScreen, 0, 1, active)?.let { n ->
+                    val (nw, nh) = screenSize(n)
+                    pointerX = pointerX / w * nw
+                    pointerScreen = n
+                    pointerY += nh
+                }
+            } else if (pointerY >= h) {
+                ScreenLayout.neighbor(pointerScreen, 0, -1, active)?.let { n ->
+                    val (nw, _) = screenSize(n)
+                    pointerX = pointerX / w * nw
+                    pointerScreen = n
+                    pointerY -= h
+                }
+            }
+            val (cw, ch) = screenSize(pointerScreen)
             pointerX = pointerX.coerceIn(0f, cw - 1f)
+            pointerY = pointerY.coerceIn(0f, ch - 1f)
             // Ohne Kopf-Tracking dreht die Ansicht mit, wenn der Zeiger den Bildschirm wechselt
             if (!_viewSettings.value.headTracking && pointerScreen != _lookIndex.value) {
                 _lookIndex.value = pointerScreen
@@ -679,6 +778,7 @@ object DexController {
 
     fun pointerDown() {
         onTextContextLost?.invoke()
+        if (handleOverlayClick()) return
         if (wide) {
             WideDesk.pointerDown(canvasX(), pointerY)
             requestPhoneFocus()
@@ -820,16 +920,24 @@ object DexController {
      */
     fun handleKey(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) onTextContextLost?.invoke()
+        if (handleSwitcherKey(event)) return true
         if (event.isCtrlPressed && event.isAltPressed) {
             if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_DPAD_LEFT -> lookRelative(-1)
                     KeyEvent.KEYCODE_DPAD_RIGHT -> lookRelative(1)
+                    KeyEvent.KEYCODE_DPAD_UP -> lookVertical(1)
+                    KeyEvent.KEYCODE_DPAD_DOWN -> lookVertical(-1)
+                    KeyEvent.KEYCODE_K -> setCinema(!_cinema.value)
+                    KeyEvent.KEYCODE_S -> takeScreenshot()
                     KeyEvent.KEYCODE_C -> recenter()
                     KeyEvent.KEYCODE_H -> goHome()
                     KeyEvent.KEYCODE_1 -> lookAt(0)
                     KeyEvent.KEYCODE_2 -> lookAt(1)
                     KeyEvent.KEYCODE_3 -> lookAt(2)
+                    KeyEvent.KEYCODE_4 -> lookAt(ScreenLayout.TOP)
+                    KeyEvent.KEYCODE_5 -> lookAt(ScreenLayout.FAR_LEFT)
+                    KeyEvent.KEYCODE_6 -> lookAt(ScreenLayout.FAR_RIGHT)
                     else -> return forwardKey(event)
                 }
             }
@@ -888,6 +996,265 @@ object DexController {
                 }
             }
         }
+    }
+
+    // ---- Bildschirmfoto der Brille ----
+
+    /** Foto der Brille nach Bilder/DEX-reloaded. */
+    fun takeScreenshot() {
+        val svc = ShizukuManager.service.value
+        val glass = _glassDisplay.value
+        if (svc == null || glass == null) {
+            log("Bildschirmfoto: Shizuku-Dienst oder Brille fehlt.")
+            return
+        }
+        val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
+        val path = "/sdcard/Pictures/DEX-reloaded/DEX_$stamp.png"
+        worker.execute {
+            val r = runCatching { svc.takeScreenshot(glass.displayId, path) }.getOrElse { "Fehler: $it" }
+            if (r == "ok") {
+                android.media.MediaScannerConnection.scanFile(appContext, arrayOf(path), null, null)
+                log("Bildschirmfoto gespeichert: ${path.substringAfterLast('/')}")
+                main.post { showToast(null, "DEX reloaded", "Bildschirmfoto gespeichert", "Bilder/DEX-reloaded", null) }
+            } else {
+                log("Bildschirmfoto fehlgeschlagen: $r")
+            }
+        }
+    }
+
+    // ---- Einblendung oben (Benachrichtigung, Hinweise) ----
+
+    private var toastRect: FloatArray? = null
+    private var toastAction: (() -> Unit)? = null
+    private val hideToastRunnable = Runnable { hideToast() }
+
+    /** Bildschirm für Einblendungen: der, auf den man gerade schaut. */
+    private fun overlayScreen(): Int = when {
+        cinemaActive -> _lookIndex.value
+        gazeScreen in activeScreens() -> gazeScreen
+        else -> _lookIndex.value
+    }
+
+    /** Einblendung oben auf dem angeschauten Bildschirm, verschwindet nach 6 Sekunden. Klick ruft [onClick]. */
+    fun showToast(icon: android.graphics.Bitmap?, app: String, title: String, text: String, onClick: (() -> Unit)?) {
+        if (presentation == null) return
+        val screen = overlayScreen()
+        val (w, _) = screenSize(screen)
+        val ow = OverlayBitmaps.TOAST_W.toFloat()
+        val oh = OverlayBitmaps.TOAST_H.toFloat()
+        val x = (w - ow) / 2f
+        val y = OverlayBitmaps.TOAST_TOP
+        val bmp = OverlayBitmaps.toast(icon, app, title, text)
+        renderer.setOverlay(WorkspaceRenderer.OVERLAY_TOAST, WorkspaceRenderer.Overlay(bmp, screen, x, y, ow, oh))
+        toastRect = floatArrayOf(screen.toFloat(), x, y, ow, oh)
+        toastAction = onClick
+        main.removeCallbacks(hideToastRunnable)
+        main.postDelayed(hideToastRunnable, 6000)
+    }
+
+    fun hideToast() {
+        main.removeCallbacks(hideToastRunnable)
+        if (toastRect == null) return
+        toastRect = null
+        toastAction = null
+        renderer.setOverlay(WorkspaceRenderer.OVERLAY_TOAST, null)
+    }
+
+    /** Klick auf die Einblendung: öffnen oder (Kreuz rechts) schließen. Gibt true zurück, wenn getroffen. */
+    private fun handleOverlayClick(): Boolean {
+        val r = toastRect ?: return false
+        if (pointerScreen != r[0].toInt()) return false
+        if (pointerX < r[1] || pointerX > r[1] + r[3] || pointerY < r[2] || pointerY > r[2] + r[4]) return false
+        val close = pointerX > r[1] + r[3] - OverlayBitmaps.TOAST_CLOSE_W
+        val action = toastAction
+        hideToast()
+        if (!close) action?.invoke()
+        return true
+    }
+
+    // ---- Laufende Apps, Taskleiste und App-Umschalter ----
+
+    /** Laufende App (Aufgabe) auf einem Display der Brille. */
+    data class RunningTask(val taskId: Int, val displayId: Int, val component: String, val packageName: String)
+
+    private val _tasks = MutableStateFlow<List<RunningTask>>(emptyList())
+    /** Laufende Apps auf der Brille, zuletzt genutzte zuerst. */
+    val tasks: StateFlow<List<RunningTask>> = _tasks.asStateFlow()
+
+    private val _runningApps = MutableStateFlow<List<AppEntry>>(emptyList())
+    /** Laufende Apps als Einträge für das Dock (ohne Startbildschirm), je Paket einmal. */
+    val runningApps: StateFlow<List<AppEntry>> = _runningApps.asStateFlow()
+
+    private var tasksError: String? = null
+
+    private val taskPoll = object : Runnable {
+        override fun run() {
+            refreshTasks()
+            if (presentation != null) main.postDelayed(this, 2000)
+        }
+    }
+
+    /** Aufgabenliste vom Dienst holen. [after] läuft danach auf dem Hauptthread. */
+    fun refreshTasks(after: (() -> Unit)? = null) {
+        val svc = ShizukuManager.service.value ?: return
+        val own = ownDisplayIds() + WideDesk.displayIds()
+        worker.execute {
+            val text = runCatching { svc.getTasks() }.getOrElse { "FEHLER|$it" }
+            val err = text.lines().firstOrNull { it.startsWith("FEHLER|") }
+            if (err != null && err != tasksError) log("Laufende Apps nicht lesbar: ${err.substringAfter('|')}")
+            tasksError = err
+            val list = text.lines().mapNotNull { line ->
+                val f = line.split('|')
+                if (f.size < 5) return@mapNotNull null
+                val id = f[0].toIntOrNull() ?: return@mapNotNull null
+                val display = f[1].toIntOrNull() ?: return@mapNotNull null
+                val comp = f[2]
+                val pkg = comp.substringBefore('/').ifEmpty { f[3] }
+                if (display !in own || pkg.isEmpty() || HomeStore.isHome(comp)) return@mapNotNull null
+                RunningTask(id, display, comp, pkg)
+            }
+            val pm = appContext.packageManager
+            val apps = list.distinctBy { it.packageName }.map { t ->
+                val label = runCatching { pm.getApplicationLabel(pm.getApplicationInfo(t.packageName, 0)).toString() }
+                    .getOrDefault(t.packageName)
+                val launch = pm.getLaunchIntentForPackage(t.packageName)?.component?.flattenToString() ?: t.component
+                AppEntry(label, t.packageName, launch)
+            }
+            main.post {
+                _tasks.value = list
+                _runningApps.value = apps
+                after?.invoke()
+            }
+        }
+    }
+
+    private fun moveTask(t: RunningTask) {
+        val svc = ShizukuManager.service.value ?: return
+        worker.execute {
+            val r = runCatching { svc.moveTaskToFront(t.taskId, t.component, t.displayId) }.getOrElse { "Fehler: $it" }
+            if (r != "ok") r.lines().filter { it.isNotBlank() }.take(3).forEach { log("  $it") }
+        }
+    }
+
+    /**
+     * App aus dem Dock: läuft sie schon auf der Brille, dorthin wechseln und nach vorn holen.
+     * Sonst wie bisher auf Bildschirm [screen] öffnen.
+     */
+    fun activateApp(app: AppEntry, screen: Int) {
+        if (wide) {
+            if (!WideDesk.bringToFront(app.packageName)) openApp(screen, app)
+            return
+        }
+        val t = _tasks.value.firstOrNull { it.packageName == app.packageName }
+        if (t == null) {
+            openApp(screen, app)
+            return
+        }
+        val idx = _slots.value.values.firstOrNull { it.displayId == t.displayId }?.index
+        if (idx != null && idx != _lookIndex.value) lookAt(idx)
+        if (idx != null) setFocus(idx)
+        moveTask(t)
+    }
+
+    /** Zur vorher genutzten App auf dem Bildschirm mit Fokus wechseln (im Breitbild: vorheriges Fenster). */
+    fun switchToPrevious() {
+        if (wide) {
+            WideDesk.switchToPrevious()
+            return
+        }
+        val screen = _focusedScreen.value
+        val display = _slots.value[screen]?.displayId ?: return
+        refreshTasks {
+            val here = _tasks.value.filter { it.displayId == display }
+            val isHome = HomeStore.isHome(_screenApps.value[screen]?.component)
+            when {
+                here.size >= 2 -> moveTask(here[1])
+                here.size == 1 && isHome -> goHome()
+            }
+        }
+    }
+
+    private class SwitchEntry(val label: String, val packageName: String?, val action: () -> Unit)
+
+    private var switcher: List<SwitchEntry>? = null
+    private var switcherSel = 0
+    private var switcherScreen = 1
+
+    /** Alt+Tab: Umschalter öffnen bzw. zur nächsten (+1) oder vorigen (-1) App. */
+    private fun switcherStep(delta: Int) {
+        if (switcher == null) {
+            val entries = switcherEntries()
+            if (entries.size < 2) return
+            switcher = entries
+            switcherSel = 0
+            switcherScreen = if (wide) overlayScreen() else _focusedScreen.value
+        }
+        val list = switcher ?: return
+        switcherSel = (switcherSel + delta).mod(list.size)
+        val pm = appContext.packageManager
+        val items = list.map { e ->
+            val icon = e.packageName?.let { pkg ->
+                runCatching { pm.getApplicationIcon(pkg).toBitmap(96, 96) }.getOrNull()
+            }
+            icon to e.label
+        }
+        val bmp = OverlayBitmaps.switcher(items, switcherSel)
+        val (w, h) = screenSize(switcherScreen)
+        val ow = bmp.width.toFloat()
+        val oh = bmp.height.toFloat()
+        renderer.setOverlay(
+            WorkspaceRenderer.OVERLAY_SWITCHER,
+            WorkspaceRenderer.Overlay(bmp, switcherScreen, (w - ow) / 2f, (h - oh) / 2f, ow, oh),
+        )
+    }
+
+    private fun switcherEntries(): List<SwitchEntry> {
+        if (wide) {
+            return WideDesk.windowApps().map { app ->
+                SwitchEntry(app.label, app.packageName) { WideDesk.bringToFront(app.packageName) }
+            } + SwitchEntry("Startbildschirm", appContext.packageName) { WideDesk.focusBackground() }
+        }
+        val screen = _focusedScreen.value
+        val display = _slots.value[screen]?.displayId ?: return emptyList()
+        val labels = _runningApps.value.associate { it.packageName to it.label }
+        val list = _tasks.value.filter { it.displayId == display }.map { t ->
+            SwitchEntry(labels[t.packageName] ?: t.packageName, t.packageName) { moveTask(t) }
+        }
+        val home = if (HomeStore.isHome(_screenApps.value[screen]?.component)) {
+            listOf(SwitchEntry("Startbildschirm", appContext.packageName) { goHome() })
+        } else emptyList()
+        return (list + home).take(OverlayBitmaps.SWITCHER_MAX)
+    }
+
+    private fun switcherClose(commit: Boolean) {
+        val list = switcher ?: return
+        switcher = null
+        renderer.setOverlay(WorkspaceRenderer.OVERLAY_SWITCHER, null)
+        if (commit) list.getOrNull(switcherSel)?.action?.invoke()
+    }
+
+    /** Tasten für den Umschalter. Gibt true zurück, wenn verbraucht. */
+    private fun handleSwitcherKey(event: KeyEvent): Boolean {
+        val down = event.action == KeyEvent.ACTION_DOWN
+        if (event.keyCode == KeyEvent.KEYCODE_TAB && event.isAltPressed) {
+            if (down) switcherStep(if (event.isShiftPressed) -1 else 1)
+            return true
+        }
+        if (switcher == null) return false
+        when (event.keyCode) {
+            KeyEvent.KEYCODE_ALT_LEFT, KeyEvent.KEYCODE_ALT_RIGHT, KeyEvent.KEYCODE_CTRL_LEFT, KeyEvent.KEYCODE_CTRL_RIGHT -> {
+                if (!down) {
+                    forwardKey(event)
+                    switcherClose(commit = true)
+                }
+            }
+            KeyEvent.KEYCODE_ESCAPE -> if (down) switcherClose(commit = false)
+            KeyEvent.KEYCODE_ENTER -> if (down) switcherClose(commit = true)
+            KeyEvent.KEYCODE_DPAD_LEFT -> if (down) switcherStep(-1)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> if (down) switcherStep(1)
+            else -> return false
+        }
+        return true
     }
 
     fun shutdown() {
