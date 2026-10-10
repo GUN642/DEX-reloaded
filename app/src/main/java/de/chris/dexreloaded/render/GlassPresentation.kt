@@ -19,6 +19,14 @@ class GlassPresentation(
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Höchste Bildwiederholrate bei gleicher Auflösung: weniger Unschärfe beim Kopfdrehen
+        val cur = display.mode
+        val best = display.supportedModes
+            .filter { it.physicalWidth == cur.physicalWidth && it.physicalHeight == cur.physicalHeight }
+            .maxByOrNull { it.refreshRate }
+        if (best != null && best.modeId != cur.modeId) {
+            window?.let { w -> w.attributes = w.attributes.apply { preferredDisplayModeId = best.modeId } }
+        }
         val view = GLSurfaceView(context).apply {
             setEGLContextClientVersion(3)
             setEGLConfigChooser(8, 8, 8, 8, 16, 0)

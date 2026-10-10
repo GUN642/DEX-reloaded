@@ -3,6 +3,7 @@ package de.chris.dexreloaded.imu
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.asin
@@ -22,9 +23,9 @@ object HeadTracker {
     private const val KEY_UP = "imuUpAxis"
     private const val KEY_RIGHT = "imuRightAxis"
 
-    // Annahme Nord-West-Oben: hoch = +Z, rechts = -Y, vorne = +X
-    private const val DEFAULT_UP = 3
-    private const val DEFAULT_RIGHT = -2
+    // Am Gerät (Viture Pro 2) per Ausrichten gemessen: hoch = +Y, rechts = +X
+    private const val DEFAULT_UP = 2
+    private const val DEFAULT_RIGHT = 1
 
     private lateinit var prefs: SharedPreferences
 
@@ -45,9 +46,13 @@ object HeadTracker {
     private val q = FloatArray(4)
     private val rel = FloatArray(4)
 
-    /** Geglättete Werte in Grad. */
-    private var yaw = 0f
-    private var pitch = 0f
+    /**
+     * Adaptive Glättung (One-Euro-Filter): in Ruhe stark, damit nichts zittert und
+     * der Text scharf bleibt, bei schneller Drehung kaum, damit nichts nachhängt.
+     */
+    private val yawFilter = OneEuro(MIN_CUTOFF, BETA)
+    private val pitchFilter = OneEuro(MIN_CUTOFF, BETA)
+    private var lastNanos = 0L
 
     /** Zuletzt berechnete Werte für die Anzeige. */
     @Volatile
@@ -58,9 +63,8 @@ object HeadTracker {
     var lastPitch = 0f
         private set
 
-    /** Anteil des neuen Werts pro Bild (1 = keine Glättung). */
-    @Volatile
-    var smoothing = 0.6f
+    private const val MIN_CUTOFF = 0.5f
+    private const val BETA = 0.15f
 
     fun init(context: Context) {
         prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -85,10 +89,13 @@ object HeadTracker {
             System.arraycopy(q, 0, ref, 0, 4)
             hasRef = true
             recenterRequested = false
-            yaw = 0f
-            pitch = 0f
+            yawFilter.reset()
+            pitchFilter.reset()
         }
         relative(ref, q, rel)
+        val now = System.nanoTime()
+        val dt = if (lastNanos == 0L) 1f / 60f else ((now - lastNanos) / 1e9f).coerceIn(1f / 500f, 0.1f)
+        lastNanos = now
 
         val up = axis(upAxis)
         val right = axis(rightAxis)
@@ -100,20 +107,61 @@ object HeadTracker {
         val newYaw = Math.toDegrees(atan2(dx, dz).toDouble()).toFloat()
         val newPitch = Math.toDegrees(asin(dy.coerceIn(-1f, 1f)).toDouble()).toFloat()
 
-        // Glätten, beim Gieren über ±180° hinweg sauber bleiben
-        var dYaw = newYaw - yaw
-        if (dYaw > 180f) dYaw -= 360f
-        if (dYaw < -180f) dYaw += 360f
-        yaw += dYaw * smoothing
-        if (yaw > 180f) yaw -= 360f
-        if (yaw < -180f) yaw += 360f
-        pitch += (newPitch - pitch) * smoothing
+        // Beim Gieren über ±180° hinweg sauber bleiben: relativ zum Filterwert entfalten
+        var yawIn = newYaw
+        if (yawFilter.ready) {
+            while (yawIn - yawFilter.value > 180f) yawIn -= 360f
+            while (yawIn - yawFilter.value < -180f) yawIn += 360f
+        }
+        var yaw = yawFilter.filter(yawIn, dt)
+        if (yaw > 180f || yaw < -180f) {
+            yaw = ((yaw + 540f) % 360f) - 180f
+            yawFilter.shift(yaw)
+        }
+        val pitch = pitchFilter.filter(newPitch, dt)
 
         out[0] = yaw
         out[1] = pitch
         lastYaw = yaw
         lastPitch = pitch
         return true
+    }
+
+    /** One-Euro-Filter (Casiez et al. 2012) für einen Winkel in Grad. */
+    private class OneEuro(val minCutoff: Float, val beta: Float, val dCutoff: Float = 1f) {
+        var value = 0f
+            private set
+        private var deriv = 0f
+        var ready = false
+            private set
+
+        fun reset() {
+            ready = false
+        }
+
+        /** Setzt den Wert ohne Sprung in der Ableitung (nach dem Umklappen bei ±180°). */
+        fun shift(v: Float) {
+            value = v
+        }
+
+        fun filter(x: Float, dt: Float): Float {
+            if (!ready) {
+                value = x
+                deriv = 0f
+                ready = true
+                return x
+            }
+            val d = (x - value) / dt
+            deriv += alpha(dCutoff, dt) * (d - deriv)
+            val cutoff = minCutoff + beta * abs(deriv)
+            value += alpha(cutoff, dt) * (x - value)
+            return value
+        }
+
+        private fun alpha(cutoff: Float, dt: Float): Float {
+            val r = 2f * PI.toFloat() * cutoff * dt
+            return r / (r + 1f)
+        }
     }
 
     // ---- Kalibrierung ----

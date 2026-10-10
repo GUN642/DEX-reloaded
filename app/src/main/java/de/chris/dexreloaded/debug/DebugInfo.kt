@@ -53,6 +53,11 @@ object DebugInfo {
                 append(", Zustand ").append(stateName(d.state))
                 append('\n')
                 append("  Presentation-Kategorie: ").append(if (d.displayId in presentationIds) "ja" else "nein")
+                val modes = d.supportedModes
+                if (modes.size > 1) {
+                    append("\n  Modi: ")
+                    append(modes.joinToString(", ") { "${it.physicalWidth}x${it.physicalHeight}@${it.refreshRate.toInt()}" })
+                }
             }
         }
     }
