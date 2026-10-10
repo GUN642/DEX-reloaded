@@ -297,6 +297,7 @@ object DexController {
     }
 
     private fun presentationClosed() {
+        if (_recording.value) toggleRecording()
         presentation = null
         renderer.pointerScreen = -1
         VitureImu.stop()
@@ -833,6 +834,51 @@ object DexController {
         val svc = ShizukuManager.service.value ?: return false
         svc.injectKey(id, event.action, event.keyCode, event.metaState, event.repeatCount, event.downTime)
         return true
+    }
+
+    // ---- Bildschirmaufnahme der Brille ----
+
+    private val _recording = MutableStateFlow(false)
+    val recording: StateFlow<Boolean> = _recording.asStateFlow()
+
+    /** Aufnahme starten oder beenden. Videos landen in Filme/DEX-reloaded. */
+    fun toggleRecording() {
+        val svc = ShizukuManager.service.value
+        if (svc == null) {
+            log("Aufnahme: Shizuku-Dienst fehlt.")
+            return
+        }
+        if (_recording.value) {
+            _recording.value = false
+            worker.execute {
+                val files = runCatching { svc.stopRecording() }.getOrElse { "" }
+                    .lines().filter { it.isNotBlank() }
+                if (files.isEmpty()) {
+                    log("Aufnahme beendet, aber keine Datei geschrieben.")
+                } else {
+                    android.media.MediaScannerConnection.scanFile(appContext, files.toTypedArray(), null, null)
+                    files.forEach { log("Aufnahme gespeichert: ${it.substringAfterLast('/')}") }
+                }
+            }
+        } else {
+            val glass = _glassDisplay.value
+            if (glass == null) {
+                log("Aufnahme: keine Brille.")
+                return
+            }
+            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.GERMANY).format(Date())
+            val base = "/sdcard/Movies/DEX-reloaded/DEX_$stamp"
+            _recording.value = true
+            worker.execute {
+                val r = runCatching { svc.startRecording(glass.displayId, base) }.getOrElse { "Fehler: $it" }
+                if (r != "ok") {
+                    _recording.value = false
+                    log("Aufnahme nicht gestartet: $r")
+                } else {
+                    log("Aufnahme läuft (Teile zu je 3 Minuten, ohne Ton)")
+                }
+            }
+        }
     }
 
     fun shutdown() {

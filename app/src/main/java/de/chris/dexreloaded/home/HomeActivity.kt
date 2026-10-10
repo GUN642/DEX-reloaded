@@ -513,6 +513,21 @@ private fun AppIcon(
                 val here = if (i == screen()) " (hier)" else ""
                 DropdownMenuItem(text = { Text("Auf Bildschirm ${i + 1} öffnen$here") }, onClick = { open(i) })
             }
+            if (pinned) {
+                val idx = dock.indexOfFirst { it.component == app.component }
+                if (idx > 0) {
+                    DropdownMenuItem(text = { Text("Im Dock nach links") }, onClick = {
+                        menu = false
+                        HomeStore.move(app, -1)
+                    })
+                }
+                if (idx in 0 until dock.size - 1) {
+                    DropdownMenuItem(text = { Text("Im Dock nach rechts") }, onClick = {
+                        menu = false
+                        HomeStore.move(app, 1)
+                    })
+                }
+            }
             DropdownMenuItem(
                 text = { Text(if (pinned) "Vom Dock lösen" else "Ans Dock anheften") },
                 onClick = {

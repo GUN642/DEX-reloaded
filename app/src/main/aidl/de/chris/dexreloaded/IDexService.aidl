@@ -38,4 +38,13 @@ interface IDexService {
 
     // Größe eines virtuellen Displays ändern (Fenster im Breitbild).
     void resizeVirtualDisplay(int displayId, int width, int height, int dpi) = 11;
+
+    // Bildschirmaufnahme des Displays (Brille) per screenrecord in Dateien basePath_1.mp4, _2 ...
+    // screenrecord hört nach 3 Minuten auf, dann geht es mit dem nächsten Teil weiter.
+    String startRecording(int displayId, String basePath) = 12;
+
+    // Beendet die Aufnahme. Gibt die geschriebenen Dateien zurück, eine pro Zeile.
+    String stopRecording() = 13;
+
+    boolean isRecording() = 14;
 }

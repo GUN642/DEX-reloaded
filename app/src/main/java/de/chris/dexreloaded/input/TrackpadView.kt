@@ -221,9 +221,10 @@ class TrackpadView(context: Context) : View(context) {
     override fun onCheckIsTextEditor(): Boolean = keyboardShown
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        // Sichtbares Passwortfeld: keine Vorschläge, keine Zwischentexte, jedes Zeichen kommt sofort
-        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD or
-            InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        // Normales Textfeld mit Vorschlägen und Autokorrektur. Zwischentexte (Composing) werden
+        // in ForwardingConnection als Differenz weitergegeben: Löschen und neu Tippen.
+        outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or
+            InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_ACTION_NONE
         return ForwardingConnection(this)

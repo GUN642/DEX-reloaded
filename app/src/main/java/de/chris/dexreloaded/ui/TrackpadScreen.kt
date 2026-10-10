@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -63,6 +64,11 @@ fun TrackpadScreen(onClose: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
             )
+            val rec by DexController.recording.collectAsState()
+            OutlinedButton(onClick = { DexController.toggleRecording() }) {
+                Text(if (rec) "■ Stopp" else "● Aufnahme", color = if (rec) Color(0xFFFF5252) else Color.Unspecified)
+            }
+            Spacer(Modifier.width(6.dp))
             Button(onClick = { pad?.let { keyboard = it.toggleKeyboard() } }) {
                 Text(if (keyboard) "Tastatur aus" else "Tastatur")
             }

@@ -45,7 +45,13 @@ fun GlassCard(onShowPresentation: () -> Unit) {
         val m = g.mode
         Text("${g.name}, ${m.physicalWidth}x${m.physicalHeight}, Display ${g.displayId}")
         if (shown) {
-            OutlinedButton(onClick = { DexController.hidePresentation() }) { Text("Arbeitsfläche schließen") }
+            val rec by DexController.recording.collectAsState()
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { DexController.hidePresentation() }) { Text("Arbeitsfläche schließen") }
+                OutlinedButton(onClick = { DexController.toggleRecording() }) {
+                    Text(if (rec) "■ Aufnahme stoppen" else "● Aufnahme")
+                }
+            }
         } else {
             Button(onClick = onShowPresentation) { Text("Arbeitsfläche anzeigen") }
         }

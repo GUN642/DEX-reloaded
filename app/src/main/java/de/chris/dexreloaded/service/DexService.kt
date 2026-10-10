@@ -166,6 +166,80 @@ class DexService() : IDexService.Stub() {
         HiddenApi.inject(ev, displayId)
     }
 
+    // ---- Bildschirmaufnahme ----
+
+    @Volatile private var recording = false
+    @Volatile private var recPid = -1
+    private val recFiles = mutableListOf<String>()
+    private var recThread: Thread? = null
+
+    override fun startRecording(displayId: Int, basePath: String): String {
+        if (recording) return "läuft schon"
+        recording = true
+        synchronized(recFiles) { recFiles.clear() }
+        java.io.File(basePath).parentFile?.mkdirs()
+        val target = physicalDisplayId(displayId)
+        Log.i(TAG, "Aufnahme: Display $displayId, physisch $target")
+        val t = Thread({
+            var part = 1
+            while (recording) {
+                val file = "${basePath}_$part.mp4"
+                synchronized(recFiles) { recFiles.add(file) }
+                try {
+                    // Erste Zeile ist die PID, damit wir sauber mit SIGINT beenden können
+                    val p = ProcessBuilder(
+                        "/system/bin/sh", "-c",
+                        "echo \$\$; exec /system/bin/screenrecord --display-id $target --bit-rate 16000000 '$file'",
+                    ).redirectErrorStream(true).start()
+                    val reader = p.inputStream.bufferedReader()
+                    recPid = reader.readLine()?.trim()?.toIntOrNull() ?: -1
+                    reader.readText()
+                    p.waitFor()
+                } catch (e: Exception) {
+                    Log.e(TAG, "screenrecord", e)
+                    recording = false
+                }
+                recPid = -1
+                part++
+            }
+        }, "dex-record")
+        recThread = t
+        t.start()
+        return "ok"
+    }
+
+    /**
+     * screenrecord will die physische Display-ID (wie in dumpsys SurfaceFlinger), nicht die
+     * logische. Erst über Display.getAddress(), sonst per dumpsys über den Namen.
+     */
+    private fun physicalDisplayId(displayId: Int): String {
+        val display = runCatching { HiddenApi.displayManager(context).getDisplay(displayId) }.getOrNull()
+            ?: return displayId.toString()
+        runCatching {
+            val addr = android.view.Display::class.java.getMethod("getAddress").invoke(display)
+            val m = addr?.javaClass?.methods?.firstOrNull { it.name == "getPhysicalDisplayId" }
+            if (m != null) return m.invoke(addr).toString()
+        }
+        runCatching {
+            val out = exec(listOf("/system/bin/dumpsys", "SurfaceFlinger", "--display-id"))
+            val line = out.lines().firstOrNull { it.contains(display.name) }
+            val id = line?.let { Regex("Display (\\d+)").find(it)?.groupValues?.get(1) }
+            if (id != null) return id
+        }
+        return displayId.toString()
+    }
+
+    override fun stopRecording(): String {
+        recording = false
+        val pid = recPid
+        if (pid > 0) runCatching { Runtime.getRuntime().exec(arrayOf("/system/bin/kill", "-2", pid.toString())).waitFor() }
+        recThread?.join(5000)
+        recThread = null
+        return synchronized(recFiles) { recFiles.filter { java.io.File(it).length() > 0 }.joinToString("\n") }
+    }
+
+    override fun isRecording(): Boolean = recording
+
     override fun focusDisplay(displayId: Int) {
         HiddenApi.focusDisplay(displayId)
     }

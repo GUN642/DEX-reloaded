@@ -85,6 +85,18 @@ object HomeStore {
         saveDock()
     }
 
+    /** Angeheftete App im Dock um [delta] Plätze verschieben (negativ = nach links). */
+    fun move(app: AppEntry, delta: Int) {
+        val list = _dock.value.toMutableList()
+        val i = list.indexOfFirst { it.component == app.component }
+        if (i < 0) return
+        val j = (i + delta).coerceIn(0, list.size - 1)
+        if (i == j) return
+        list.add(j, list.removeAt(i))
+        _dock.value = list
+        saveDock()
+    }
+
     fun unpin(app: AppEntry) {
         _dock.update { list -> list.filter { it.component != app.component } }
         saveDock()
