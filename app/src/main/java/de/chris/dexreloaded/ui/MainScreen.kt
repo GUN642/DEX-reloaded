@@ -11,6 +11,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Card
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.FilterChip
@@ -23,6 +24,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,6 +39,9 @@ import de.chris.dexreloaded.DexController
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.shizuku.ShizukuStatus
+import de.chris.dexreloaded.update.UpdateState
+import de.chris.dexreloaded.update.Updater
+import kotlinx.coroutines.launch
 
 /** Bildschirm, auf dem in Phase 1 die Test-App läuft (der mittlere). */
 private const val TEST_SCREEN = 1
@@ -67,10 +72,42 @@ fun MainScreen(
             }
             OutlinedButton(onClick = { showDebug = true }) { Text("Debug") }
         }
+        UpdateCard()
         ShizukuCard(onOpenShizuku)
         GlassCard(onShowPresentation)
         LaunchCard()
         LogCard()
+    }
+}
+
+@Composable
+private fun UpdateCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val state by Updater.state.collectAsState()
+    val check = { scope.launch { Updater.check() } }
+    when (val st = state) {
+        UpdateState.Unbekannt, UpdateState.Pruefe -> Unit
+        UpdateState.Aktuell -> Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("Version ist aktuell.", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+            OutlinedButton(onClick = { check() }) { Text("Erneut prüfen") }
+        }
+        is UpdateState.Fehler -> Section("Update") {
+            Text(st.text)
+            OutlinedButton(onClick = { check() }) { Text("Erneut prüfen") }
+        }
+        is UpdateState.Verfuegbar -> Section("Update verfügbar") {
+            Text("Version ${st.release.version} ist da. Installiert ist ${BuildConfig.VERSION_NAME}.")
+            Button(onClick = { scope.launch { Updater.download(context, st.release) } }) { Text("Herunterladen") }
+        }
+        is UpdateState.Lade -> Section("Update wird geladen") {
+            Text("Version ${st.release.version}: ${st.prozent} %")
+            LinearProgressIndicator(progress = { st.prozent / 100f }, modifier = Modifier.fillMaxWidth())
+        }
+        is UpdateState.Bereit -> Section("Update bereit") {
+            Text("Version ${st.release.version} ist geladen. Beim ersten Mal fragt Android, ob DEX reloaded Apps installieren darf. Danach noch einmal auf Installieren tippen.")
+            Button(onClick = { Updater.install(context, st.file) }) { Text("Installieren") }
+        }
     }
 }
 

@@ -11,6 +11,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
+import de.chris.dexreloaded.update.Updater
+import kotlinx.coroutines.launch
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.DexTheme
 import de.chris.dexreloaded.ui.MainScreen
@@ -22,6 +25,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ShizukuManager.init(this)
         DexController.init(this)
+        if (savedInstanceState == null) lifecycleScope.launch { Updater.check() }
 
         setContent {
             DexTheme {
