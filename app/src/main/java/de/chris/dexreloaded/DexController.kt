@@ -711,6 +711,18 @@ object DexController {
 
     private var lastPointerDown = 0L
 
+    private var lastReclaim = 0L
+
+    /** Maus bewegt sich, aber das Trackpad hat keinen Fokus: sofort zurückholen (höchstens alle 300 ms). */
+    fun reclaimFocus() {
+        if (_screenConfig.value.keepPhoneFocus || !trackpadActive || trackpadFocused) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastReclaim < 300) return
+        lastReclaim = now
+        val svc = ShizukuManager.service.value ?: return
+        runCatching { svc.focusDisplay(Display.DEFAULT_DISPLAY) }
+    }
+
     /** Trackpad hat den Fokus verloren: kurz nach einem Klick auf der Brille zurückholen. */
     fun onTrackpadFocusLost() {
         if (SystemClock.uptimeMillis() - lastPointerDown < 1500) retryPhoneFocus()
