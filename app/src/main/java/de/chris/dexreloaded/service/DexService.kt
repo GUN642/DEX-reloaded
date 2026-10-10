@@ -107,6 +107,12 @@ class DexService() : IDexService.Stub() {
             append("\n  #").append(id).append(' ').append(d.name)
             append(" flags=0x").append(Integer.toHexString(d.flags))
         }
+        val tasks = HiddenApi.getTasks()
+        append("\nAufgaben (").append(tasks.size).append("), Display und App:")
+        tasks.take(15).forEach { line ->
+            val f = line.split('|')
+            append("\n  ").append(f.getOrNull(1) ?: "?").append("  ").append(f.getOrNull(2) ?: line)
+        }
     }
 
     override fun injectTouch(displayId: Int, action: Int, x: Float, y: Float, downTime: Long) {

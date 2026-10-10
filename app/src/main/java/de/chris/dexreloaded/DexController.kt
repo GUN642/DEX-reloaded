@@ -1152,6 +1152,8 @@ object DexController {
         worker.execute {
             val r = runCatching { svc.moveTaskToFront(t.taskId, t.component, t.displayId) }.getOrElse { "Fehler: $it" }
             if (r != "ok") r.lines().filter { it.isNotBlank() }.take(3).forEach { log("  $it") }
+            // Nach vorn holen kann den Systemfokus aufs Display ziehen, dann Maus zurückholen
+            main.post { requestPhoneFocus() }
         }
     }
 
@@ -1376,6 +1378,7 @@ object DexController {
             opts.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
         }
         pi.send(appContext, 0, null, null, null, null, opts.toBundle())
+        main.post { requestPhoneFocus() }
         true
     } catch (e: Exception) {
         log("Benachrichtigung öffnen fehlgeschlagen: $e")
