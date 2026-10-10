@@ -109,6 +109,16 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 6. Renderer zeichnet dauerhaft (`RENDERMODE_CONTINUOUSLY`). Kamera: Kopf plus Versatz der Knöpfe „Blick auf 1, 2, 3“.
 7. USB-Filter für VID 0x35CA in `MainActivity`, damit Android die App beim Anstecken anbietet und den Zugriff dauerhaft erlaubt.
 
+## Festlegungen Phase 2 (ab 0.3.0)
+
+1. Drei Bildschirme, je ein virtuelles Display (gleiche Größe und Dichte für alle, einstellbar unter „Erweitert“). App pro Bildschirm wird gemerkt (`screenApp0..2`) und beim Anzeigen der Arbeitsfläche wieder gestartet, sobald der Shizuku-Dienst läuft. Zuletzt genutzte Apps (`recentApps`, max. 10) stehen oben in der App-Auswahl.
+2. Eingabe im Dienst (`IDexService`, oneway): `injectTouch` (Finger, DOWN/MOVE/UP), `injectScroll` (Maus, ACTION_SCROLL), `injectKey`. `HiddenApi.inject` nutzt `InputManagerGlobal` (ab Android 14) bzw. `InputManager`, Display-ID per `InputEvent.setDisplayId`.
+3. Klicks werden als Berührung eingespeist, nicht als Maus. Das verstehen alle Apps, Ziehen scrollt Listen. Rechte Maustaste und Zwei-Finger-Tippen sind Zurück.
+4. Zeiger: eigene Koordinaten (Bildschirm 0..2, Pixel im virtuellen Display), geht über die Ränder in den Nachbarn. Der Renderer zeichnet einen Pfeil davor und einen blauen Rahmen um den Bildschirm mit Fokus. Fokus wechselt beim Klicken und mit dem Blick.
+5. „Zeiger folgt Blick“ (Standard an): Schaut man auf einen anderen Bildschirm, springt der Zeiger in dessen Mitte und der Fokus wechselt.
+6. Trackpad ist ein Vollbild-Modus **in** `MainActivity` (keine eigene Activity), damit die Presentation sichtbar bleibt. `input/TrackpadView`: ein Finger bewegt, Tippen klickt, ruhig halten dann ziehen (langes Drücken), zwei Finger scrollen, drei Finger wischen wechselt den Bildschirm. Bluetooth-Maus per Pointer Capture. Bildschirm bleibt an, „Dunkel“ dimmt das Handy.
+7. Bluetooth-Tastatur: `MainActivity.dispatchKeyEvent` leitet bei offenem Trackpad Tasten von echten Geräten an den fokussierten Bildschirm. Kürzel: Strg+Alt+Links/Rechts (Bildschirm wechseln), Strg+Alt+1/2/3, Strg+Alt+C (zentrieren).
+
 ## Stand
 
-Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung. 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate. Als Nächstes Phase 2 (Eingabe, drei Apps).
+Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). 0.3.0 bringt Phase 2 und wartet auf den Gerätetest.

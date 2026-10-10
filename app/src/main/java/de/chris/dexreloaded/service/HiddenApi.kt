@@ -8,6 +8,7 @@ import android.hardware.display.DisplayManager
 import android.hardware.display.VirtualDisplay
 import android.os.Build
 import android.util.Log
+import android.view.InputEvent
 import android.view.Surface
 
 /**
@@ -95,6 +96,48 @@ object HiddenApi {
         val dm = ctor.newInstance(ctx)
         displayManager = dm
         return dm
+    }
+
+    // ---- Eingabe ----
+
+    private const val INJECT_MODE_ASYNC = 0
+
+    private val inputManager: Any? by lazy {
+        // Ab Android 14 liegt injectInputEvent in InputManagerGlobal, davor in InputManager.
+        val names = listOf("android.hardware.input.InputManagerGlobal", "android.hardware.input.InputManager")
+        for (n in names) {
+            try {
+                val cls = Class.forName(n)
+                val inst = cls.getDeclaredMethod("getInstance").apply { isAccessible = true }.invoke(null)
+                if (inst != null) {
+                    cls.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
+                    return@lazy inst
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "$n nicht nutzbar: $e")
+            }
+        }
+        null
+    }
+
+    private val injectMethod by lazy {
+        inputManager?.javaClass?.getMethod("injectInputEvent", InputEvent::class.java, Int::class.javaPrimitiveType)
+    }
+
+    private val setDisplayIdMethod by lazy {
+        InputEvent::class.java.getMethod("setDisplayId", Int::class.javaPrimitiveType)
+    }
+
+    /** Speist ein Eingabeereignis auf dem Display [displayId] ein. */
+    fun inject(event: InputEvent, displayId: Int): Boolean {
+        return try {
+            setDisplayIdMethod.invoke(event, displayId)
+            val im = inputManager ?: return false
+            injectMethod?.invoke(im, event, INJECT_MODE_ASYNC) as? Boolean ?: false
+        } catch (e: Throwable) {
+            Log.w(TAG, "injectInputEvent fehlgeschlagen", e)
+            false
+        }
     }
 
     /**

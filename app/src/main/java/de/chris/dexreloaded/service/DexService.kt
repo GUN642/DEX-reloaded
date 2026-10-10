@@ -4,7 +4,12 @@ import android.content.Context
 import android.hardware.display.VirtualDisplay
 import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
+import android.view.InputDevice
+import android.view.KeyCharacterMap
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.Surface
 import de.chris.dexreloaded.IDexService
 import java.util.concurrent.ConcurrentHashMap
@@ -90,6 +95,63 @@ class DexService() : IDexService.Stub() {
             append("\n  #").append(id).append(' ').append(d.name)
             append(" flags=0x").append(Integer.toHexString(d.flags))
         }
+    }
+
+    override fun injectTouch(displayId: Int, action: Int, x: Float, y: Float, downTime: Long) {
+        val now = SystemClock.uptimeMillis()
+        val props = arrayOf(
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+        )
+        val coords = arrayOf(
+            MotionEvent.PointerCoords().apply {
+                this.x = x
+                this.y = y
+                pressure = if (action == MotionEvent.ACTION_UP) 0f else 1f
+                size = 1f
+            }
+        )
+        val ev = MotionEvent.obtain(
+            downTime, now, action, 1, props, coords, 0, 0, 1f, 1f, 0, 0,
+            InputDevice.SOURCE_TOUCHSCREEN, 0,
+        )
+        HiddenApi.inject(ev, displayId)
+        ev.recycle()
+    }
+
+    override fun injectScroll(displayId: Int, x: Float, y: Float, h: Float, v: Float) {
+        val now = SystemClock.uptimeMillis()
+        val props = arrayOf(
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_MOUSE
+            }
+        )
+        val coords = arrayOf(
+            MotionEvent.PointerCoords().apply {
+                this.x = x
+                this.y = y
+                setAxisValue(MotionEvent.AXIS_HSCROLL, h)
+                setAxisValue(MotionEvent.AXIS_VSCROLL, v)
+            }
+        )
+        val ev = MotionEvent.obtain(
+            now, now, MotionEvent.ACTION_SCROLL, 1, props, coords, 0, 0, 1f, 1f, 0, 0,
+            InputDevice.SOURCE_MOUSE, 0,
+        )
+        HiddenApi.inject(ev, displayId)
+        ev.recycle()
+    }
+
+    override fun injectKey(displayId: Int, action: Int, keyCode: Int, metaState: Int, repeat: Int, downTime: Long) {
+        val now = SystemClock.uptimeMillis()
+        val ev = KeyEvent(
+            downTime, now, action, keyCode, repeat, metaState,
+            KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD,
+        )
+        HiddenApi.inject(ev, displayId)
     }
 
     private fun exec(cmd: List<String>): String {

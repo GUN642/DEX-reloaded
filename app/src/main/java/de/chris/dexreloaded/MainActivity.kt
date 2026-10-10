@@ -2,6 +2,7 @@ package de.chris.dexreloaded
 
 import android.content.Intent
 import android.os.Bundle
+import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -38,6 +39,23 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    /** Bluetooth-Tastatur: bei offenem Trackpad an den fokussierten Bildschirm. */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (DexController.trackpadActive && isHardwareKey(event) && DexController.handleKey(event)) return true
+        return super.dispatchKeyEvent(event)
+    }
+
+    private fun isHardwareKey(event: KeyEvent): Boolean {
+        val dev = event.device ?: return false
+        if (dev.isVirtual) return false
+        return when (event.keyCode) {
+            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE,
+            KeyEvent.KEYCODE_POWER, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_APP_SWITCH,
+            -> false
+            else -> true
         }
     }
 

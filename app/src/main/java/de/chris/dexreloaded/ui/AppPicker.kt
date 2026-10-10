@@ -39,7 +39,12 @@ import kotlinx.coroutines.withContext
 
 /** Vollbild-Dialog zur Auswahl einer installierten App. */
 @Composable
-fun AppPicker(onPick: (AppEntry) -> Unit, onDismiss: () -> Unit) {
+fun AppPicker(
+    onPick: (AppEntry) -> Unit,
+    onDismiss: () -> Unit,
+    title: String = "App wählen",
+    recent: List<AppEntry> = emptyList(),
+) {
     val context = LocalContext.current
     val apps by produceState<List<AppEntry>?>(initialValue = null) {
         value = withContext(Dispatchers.IO) { Apps.load(context) }
@@ -50,7 +55,7 @@ fun AppPicker(onPick: (AppEntry) -> Unit, onDismiss: () -> Unit) {
         Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             Column(Modifier.padding(16.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("App wählen", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                    Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                     TextButton(onClick = onDismiss) { Text("Abbrechen") }
                 }
                 OutlinedTextField(
@@ -70,7 +75,16 @@ fun AppPicker(onPick: (AppEntry) -> Unit, onDismiss: () -> Unit) {
                             it.label.contains(query, ignoreCase = true) ||
                             it.packageName.contains(query, ignoreCase = true)
                     }
+                    val installed = list.map { it.component }.toSet()
+                    val recentShown = if (query.isBlank()) recent.filter { it.component in installed } else emptyList()
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (recentShown.isNotEmpty()) {
+                            item(key = "h-recent") { Header("Zuletzt genutzt") }
+                            items(recentShown, key = { "r-" + it.component }) { app ->
+                                AppRow(app) { onPick(app) }
+                            }
+                            item(key = "h-all") { Header("Alle Apps") }
+                        }
                         items(filtered, key = { it.component }) { app ->
                             AppRow(app) { onPick(app) }
                         }
@@ -79,6 +93,16 @@ fun AppPicker(onPick: (AppEntry) -> Unit, onDismiss: () -> Unit) {
             }
         }
     }
+}
+
+@Composable
+private fun Header(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+    )
 }
 
 @Composable

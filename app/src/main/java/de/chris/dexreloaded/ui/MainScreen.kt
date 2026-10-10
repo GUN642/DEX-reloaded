@@ -42,8 +42,6 @@ import de.chris.dexreloaded.update.UpdateState
 import de.chris.dexreloaded.update.Updater
 import kotlinx.coroutines.launch
 
-/** Bildschirm, auf dem in Phase 1 die Test-App läuft (der mittlere). */
-private const val TEST_SCREEN = 1
 
 @Composable
 fun MainScreen(
@@ -51,9 +49,16 @@ fun MainScreen(
     onOpenShizuku: () -> Unit,
 ) {
     var showDebug by remember { mutableStateOf(false) }
+    var showTrackpad by remember { mutableStateOf(false) }
+    val shown by DexController.presentationShown.collectAsState()
     if (showDebug) {
         androidx.activity.compose.BackHandler { showDebug = false }
         DebugScreen(onBack = { showDebug = false })
+        return
+    }
+    if (showTrackpad && shown) {
+        androidx.activity.compose.BackHandler { showTrackpad = false }
+        TrackpadScreen(onClose = { showTrackpad = false })
         return
     }
 
@@ -74,8 +79,13 @@ fun MainScreen(
         UpdateCard()
         ShizukuCard(onOpenShizuku)
         GlassCard(onShowPresentation)
+        if (shown) {
+            Button(onClick = { showTrackpad = true }, modifier = Modifier.fillMaxWidth()) {
+                Text("Trackpad öffnen (Maus und Tastatur an die Brille)")
+            }
+        }
+        ScreensCard()
         HeadTrackingCard()
-        LaunchCard()
         LogCard()
     }
 }
@@ -128,96 +138,6 @@ private fun ShizukuCard(onOpenShizuku: () -> Unit) {
             OutlinedButton(onClick = { ShizukuManager.refresh() }) { Text("Prüfen") }
         }
     }
-}
-
-@Composable
-private fun LaunchCard() {
-    val context = LocalContext.current
-    val prefs = remember { context.getSharedPreferences("dex", Context.MODE_PRIVATE) }
-    val slots by DexController.slots.collectAsState()
-    val service by ShizukuManager.service.collectAsState()
-    val shown by DexController.presentationShown.collectAsState()
-
-    var label by remember { mutableStateOf(prefs.getString("label", null)) }
-    var component by remember { mutableStateOf(prefs.getString("component", null)) }
-    var width by remember { mutableStateOf(prefs.getInt("width", 1920).toString()) }
-    var height by remember { mutableStateOf(prefs.getInt("height", 1080).toString()) }
-    var dpi by remember { mutableStateOf(prefs.getInt("dpi", 240).toString()) }
-    var forceStop by remember { mutableStateOf(prefs.getBoolean("forceStop", false)) }
-    var picking by remember { mutableStateOf(false) }
-
-    if (picking) {
-        AppPicker(
-            onPick = {
-                label = it.label
-                component = it.component
-                prefs.edit {
-                    putString("label", it.label)
-                    putString("component", it.component)
-                }
-                picking = false
-            },
-            onDismiss = { picking = false },
-        )
-    }
-
-    Section("App auf Bildschirm ${TEST_SCREEN + 1}") {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(label ?: "Keine App gewählt")
-                component?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            }
-            OutlinedButton(onClick = { picking = true }) { Text("App wählen") }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            NumberField("Breite", width, Modifier.weight(1f)) { width = it }
-            NumberField("Höhe", height, Modifier.weight(1f)) { height = it }
-            NumberField("DPI", dpi, Modifier.weight(1f)) { dpi = it }
-        }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Checkbox(checked = forceStop, onCheckedChange = { forceStop = it })
-            Text("App vorher beenden (falls sie schon auf dem Handy läuft)")
-        }
-        val slot = slots[TEST_SCREEN]
-        if (slot != null) {
-            Text("Virtuelles Display ${slot.displayId}, ${slot.width}x${slot.height}, ${slot.dpi} dpi")
-        }
-        val w = width.toIntOrNull()
-        val h = height.toIntOrNull()
-        val d = dpi.toIntOrNull()
-        val ready = component != null && service != null && shown &&
-            w != null && h != null && d != null && w in 320..4096 && h in 240..4096 && d in 72..640
-        if (!shown) Text("Erst die Arbeitsfläche auf der Brille anzeigen.", style = MaterialTheme.typography.bodySmall)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(
-                enabled = ready,
-                onClick = {
-                    prefs.edit {
-                        putInt("width", w!!)
-                        putInt("height", h!!)
-                        putInt("dpi", d!!)
-                        putBoolean("forceStop", forceStop)
-                    }
-                    DexController.launchOnScreen(TEST_SCREEN, component!!, w!!, h!!, d!!, forceStop)
-                },
-            ) { Text("Starten") }
-            if (slot != null) {
-                OutlinedButton(onClick = { DexController.releaseScreen(TEST_SCREEN) }) { Text("Display schließen") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NumberField(label: String, value: String, modifier: Modifier, onChange: (String) -> Unit) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = { v -> onChange(v.filter { it.isDigit() }.take(4)) },
-        label = { Text(label) },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = modifier,
-    )
 }
 
 @Composable
