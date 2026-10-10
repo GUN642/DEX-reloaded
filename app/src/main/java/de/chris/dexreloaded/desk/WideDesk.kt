@@ -9,11 +9,13 @@ import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.BG_ID
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.RESIZE_PX
-import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.SCREEN_COUNT
+import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.WIDE_PANELS
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.TITLE_PX
 import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.WINDOW_ID_BASE
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
+import de.chris.dexreloaded.workspace.WinState
+import de.chris.dexreloaded.workspace.Workspaces
 import java.util.concurrent.Executors
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -74,7 +76,7 @@ object WideDesk {
     /** Ein Fenster wird gerade verschoben, vergrößert oder darin gezogen. */
     val dragging get() = drag != null
 
-    val canvasW get() = panelW * SCREEN_COUNT
+    val canvasW get() = panelW * WIDE_PANELS
 
     fun init(context: Context, r: WorkspaceRenderer, logger: (String) -> Unit) {
         appContext = context.applicationContext
@@ -95,6 +97,12 @@ object WideDesk {
         loadWallpaper()
         if (bgDisplayId >= 0 || bgPending) return
         val service = ShizukuManager.service.value ?: return
+        // Gemerkte Fenster wieder öffnen
+        if (wins.isEmpty()) {
+            val saved = savedWindows()
+            if (saved.isNotEmpty()) log("Breitbild: ${saved.size} gemerkte Fenster")
+            saved.forEach { openWindow(it.app, 1, floatArrayOf(it.x, it.y, it.w, it.h), save = false) }
+        }
         bgPending = true
         // Startbildschirm nur auf der mittleren Fläche (normale Breite). Sehr breite Displays
         // rechnet Android herunter, dann wird alles unscharf. Das Bild daneben malt der Renderer.
@@ -164,23 +172,51 @@ object WideDesk {
 
     // ---- Fenster ----
 
-    /** App in einem neuen Fenster auf Bildschirm [panel] (0..2) öffnen. */
-    fun openWindow(app: AppEntry, panel: Int) {
+    /**
+     * Benachrichtigung öffnen: vorhandenes Fenster der App nach vorn und die Absicht dorthin,
+     * sonst neues Fenster und die Absicht nach dem Start.
+     */
+    fun openWithIntent(
+        app: AppEntry?,
+        packageName: String,
+        panel: Int,
+        pi: android.app.PendingIntent?,
+        send: (android.app.PendingIntent, Int) -> Boolean,
+    ) {
+        val existing = wins.lastOrNull { it.app.packageName == packageName }
+        if (existing != null) {
+            bringToFront(existing)
+            if (pi != null && existing.displayId >= 0) send(pi, existing.displayId)
+            return
+        }
+        if (app == null) return
+        openWindow(app, panel, then = if (pi != null) { id -> send(pi, id) } else null)
+    }
+
+    /** App in einem neuen Fenster auf Bildschirm [panel] (0..2) öffnen. [then] bekommt die Display-ID (Hintergrundthread). */
+    fun openWindow(
+        app: AppEntry,
+        panel: Int,
+        geom: FloatArray? = null,
+        then: ((Int) -> Unit)? = null,
+        save: Boolean = true,
+    ) {
         val service = ShizukuManager.service.value ?: return
-        val existing = wins.firstOrNull { it.app.component == app.component }
+        val existing = wins.firstOrNull { it.app.packageName == app.packageName }
         if (existing != null) {
             bringToFront(existing)
             return
         }
-        val w = minOf(DEFAULT_W, panelW - 80f)
-        val h = minOf(DEFAULT_H, panelH - TITLE_PX - 80f)
+        val w = geom?.get(2) ?: minOf(DEFAULT_W, panelW - 80f)
+        val h = geom?.get(3) ?: minOf(DEFAULT_H, panelH - TITLE_PX - 80f)
         val cascade = (wins.size % 5) * 40f
-        val x = panel.coerceIn(0, SCREEN_COUNT - 1) * panelW + (panelW - w) / 2f + cascade
-        val y = TITLE_PX + (panelH - TITLE_PX - h) / 2f + cascade
+        val x = geom?.get(0) ?: (panel.coerceIn(0, WIDE_PANELS - 1) * panelW + (panelW - w) / 2f + cascade)
+        val y = geom?.get(1) ?: (TITLE_PX + (panelH - TITLE_PX - h) / 2f + cascade)
         val win = Win(nextId++, app, x, y, w, h)
         wins.add(win)
         focusedWin = win
         publish()
+        if (save) persist()
         val iw = w.roundToInt()
         val ih = h.roundToInt()
         renderer.attachStream(win.id, iw, ih) { surface ->
@@ -190,6 +226,7 @@ object WideDesk {
                     main.post { win.displayId = id }
                     log("Fenster: ${app.label}")
                     service.launchApp(app.component, id, false)
+                    then?.invoke(id)
                 } catch (e: Exception) {
                     log("Fenster fehlgeschlagen: $e")
                     main.post { close(win) }
@@ -200,6 +237,7 @@ object WideDesk {
 
     private fun close(win: Win) {
         wins.remove(win)
+        persist()
         if (focusedWin === win) focusedWin = wins.lastOrNull()
         renderer.detachStream(win.id)
         publish()
@@ -219,7 +257,7 @@ object WideDesk {
         val r = win.restore
         if (r == null) {
             win.restore = floatArrayOf(win.x, win.y, win.w, win.h)
-            val panel = ((win.x + win.w / 2f) / panelW).toInt().coerceIn(0, SCREEN_COUNT - 1)
+            val panel = ((win.x + win.w / 2f) / panelW).toInt().coerceIn(0, WIDE_PANELS - 1)
             win.x = panel * panelW
             win.y = TITLE_PX
             win.w = panelW
@@ -230,6 +268,7 @@ object WideDesk {
         }
         applySize(win)
         publish()
+        persist()
     }
 
     /** Neue Fenstergröße an Puffer und virtuelles Display weitergeben. */
@@ -248,6 +287,77 @@ object WideDesk {
 
     fun focusBackground() {
         focusedWin = null
+    }
+
+    // ---- Fenster merken ----
+
+    private val prefs get() = appContext.getSharedPreferences("dex", Context.MODE_PRIVATE)
+
+    private fun savedWindows(): List<WinState> = Workspaces.decodeWindows(prefs.getString("wideWindows", null))
+
+    /** Fenster und Lage merken (nach jeder Änderung durch den Nutzer). */
+    private fun persist() {
+        prefs.edit().putString("wideWindows", Workspaces.encodeWindows(currentStates())).apply()
+    }
+
+    private fun currentStates() = wins.map { WinState(it.app, it.x, it.y, it.w, it.h) }
+
+    /** Nur merken, öffnet beim nächsten Start des Breitbilds. */
+    fun rememberWindows(list: List<WinState>) {
+        prefs.edit().putString("wideWindows", Workspaces.encodeWindows(list)).apply()
+    }
+
+    /** Fenster für einen Arbeitsplatz: die offenen, sonst die gemerkten. */
+    fun windowStates(): List<WinState> = if (active) currentStates() else savedWindows()
+
+    /**
+     * Fenster eines Arbeitsplatzes herstellen. Läuft das Breitbild, werden Fenster geschlossen,
+     * verschoben und geöffnet. Sonst nur gemerkt, sie öffnen beim nächsten Start.
+     */
+    fun applyWindows(list: List<WinState>) {
+        rememberWindows(list)
+        if (!active) return
+        val wanted = list.map { it.app.packageName }.toSet()
+        wins.filter { it.app.packageName !in wanted }.forEach { close(it) }
+        for (st in list) {
+            val win = wins.firstOrNull { it.app.packageName == st.app.packageName }
+            if (win == null) {
+                openWindow(st.app, 1, floatArrayOf(st.x, st.y, st.w, st.h), save = false)
+                continue
+            }
+            val resized = win.w != st.w || win.h != st.h
+            win.x = st.x
+            win.y = st.y
+            win.w = st.w
+            win.h = st.h
+            win.restore = null
+            if (resized) applySize(win)
+        }
+        // Reihenfolge wie gespeichert, letztes oben
+        wins.sortBy { w -> list.indexOfFirst { it.app.packageName == w.app.packageName } }
+        focusedWin = wins.lastOrNull()
+        publish()
+        persist()
+    }
+
+    /** Displays der Fenster und des Startbildschirms. */
+    fun displayIds(): Set<Int> = (wins.map { it.displayId } + bgDisplayId).filter { it >= 0 }.toSet()
+
+    /** Apps der Fenster, vorderstes zuerst. */
+    fun windowApps(): List<AppEntry> = wins.reversed().map { it.app }
+
+    /** Fenster der App [packageName] nach vorn holen. Gibt false zurück, wenn es keins gibt. */
+    fun bringToFront(packageName: String): Boolean {
+        val win = wins.lastOrNull { it.app.packageName == packageName } ?: return false
+        bringToFront(win)
+        return true
+    }
+
+    /** Zwischen den beiden vordersten Fenstern wechseln. */
+    fun switchToPrevious() {
+        if (wins.size >= 2) bringToFront(wins[wins.size - 2])
+        else if (wins.size == 1 && focusedWin == null) bringToFront(wins[0])
+        else focusBackground()
     }
 
     /** Display, das Tastatureingaben bekommt. */
@@ -316,9 +426,12 @@ object WideDesk {
         val d = drag ?: return
         drag = null
         when (d) {
-            is Drag.Resize -> applySize(d.win)
+            is Drag.Resize -> {
+                applySize(d.win)
+                persist()
+            }
             is Drag.Touch -> touch(d, MotionEvent.ACTION_UP, cx, cy)
-            is Drag.Move -> Unit
+            is Drag.Move -> persist()
         }
     }
 

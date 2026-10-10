@@ -3,6 +3,7 @@ package de.chris.dexreloaded.ui
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import de.chris.dexreloaded.DexController
 import de.chris.dexreloaded.home.HomeStore
+import de.chris.dexreloaded.render.ScreenLayout
 import de.chris.dexreloaded.shizuku.ShizukuManager
 
 /** Drei Bildschirme mit je einer App, dazu Größe und Dichte der virtuellen Displays. */
@@ -37,6 +39,7 @@ fun ScreensCard() {
     val service by ShizukuManager.service.collectAsState()
     val gazeFollow by DexController.gazeFollow.collectAsState()
     val wide by DexController.wideMode.collectAsState()
+    val extras by DexController.extraScreens.collectAsState()
     val context = LocalContext.current
     var picking by remember { mutableStateOf(-1) }
     var advanced by remember { mutableStateOf(false) }
@@ -44,7 +47,7 @@ fun ScreensCard() {
     if (picking >= 0) {
         val index = picking
         AppPicker(
-            title = "App für Bildschirm ${index + 1}",
+            title = "App für ${ScreenLayout.name(index)}",
             recent = recent,
             extra = listOf(HomeStore.homeEntry(context)),
             onPick = {
@@ -69,13 +72,13 @@ fun ScreensCard() {
             }
             Switch(checked = wide, onCheckedChange = { DexController.setWideMode(it) })
         }
-        if (!wide) for (i in 0..2) {
+        if (!wide) for (i in ScreenLayout.sorted(ScreenLayout.BASE + extras)) {
             val app = apps[i]
             val slot = slots[i]
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     val mark = if (shown && focused == i) "  ●" else ""
-                    Text("Bildschirm ${i + 1}$mark", style = MaterialTheme.typography.titleSmall)
+                    Text("${ScreenLayout.name(i)}$mark", style = MaterialTheme.typography.titleSmall)
                     Text(
                         app?.label ?: "leer",
                         style = MaterialTheme.typography.bodyMedium,
@@ -89,6 +92,19 @@ fun ScreensCard() {
                     TextButton(onClick = { DexController.clearScreen(i) }) { Text("Leeren") }
                 }
             }
+        }
+        if (!wide) {
+            Text("Weitere Bildschirme", style = MaterialTheme.typography.titleSmall)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                for (i in listOf(ScreenLayout.FAR_LEFT, ScreenLayout.TOP, ScreenLayout.FAR_RIGHT)) {
+                    Checkbox(checked = i in extras, onCheckedChange = { DexController.setExtraScreen(i, it) })
+                    Text(ScreenLayout.shortName(i), modifier = Modifier.padding(end = 8.dp))
+                }
+            }
+            Text(
+                "Oben liegt über Bildschirm 2, erreichbar durch Hochschauen. Links und rechts außen neben 1 und 3.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Zeiger springt auf den Bildschirm, den du ansiehst", modifier = Modifier.weight(1f))

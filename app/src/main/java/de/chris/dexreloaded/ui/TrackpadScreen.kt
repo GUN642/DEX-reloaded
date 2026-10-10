@@ -13,6 +13,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
@@ -28,6 +29,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.view.WindowManager
 import de.chris.dexreloaded.DexController
+import de.chris.dexreloaded.render.ScreenLayout
+import androidx.compose.ui.text.style.TextOverflow
 import de.chris.dexreloaded.input.TrackpadView
 
 /** Vollbild-Trackpad. Tastatur und Maus gehen an die Brille, solange es offen ist. */
@@ -60,19 +63,21 @@ fun TrackpadScreen(onClose: () -> Unit) {
         ) {
             val app = apps[focused]?.label ?: "leer"
             Text(
-                "Fokus: Bildschirm ${focused + 1} ($app)",
+                "Fokus: ${ScreenLayout.shortName(focused)} ($app)",
                 style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
             val rec by DexController.recording.collectAsState()
-            OutlinedButton(onClick = { DexController.toggleRecording() }) {
-                Text(if (rec) "■ Stopp" else "● Aufnahme", color = if (rec) Color(0xFFFF5252) else Color.Unspecified)
+            TextButton(onClick = { DexController.toggleRecording() }) {
+                Text(if (rec) "■ Stopp" else "● Rec", color = if (rec) Color(0xFFFF5252) else Color.Unspecified)
             }
-            Spacer(Modifier.width(6.dp))
+            TextButton(onClick = { DexController.takeScreenshot() }) { Text("Foto") }
             Button(onClick = { pad?.let { keyboard = it.toggleKeyboard() } }) {
-                Text(if (keyboard) "Tastatur aus" else "Tastatur")
+                Text(if (keyboard) "Tast. aus" else "Tastatur")
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(4.dp))
             OutlinedButton(onClick = onClose) { Text("Fertig") }
         }
         AndroidView(
@@ -81,14 +86,29 @@ fun TrackpadScreen(onClose: () -> Unit) {
                 .weight(1f)
                 .fillMaxWidth(),
         )
+        val cinema by DexController.cinema.collectAsState()
+        val wide by DexController.wideMode.collectAsState()
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 8.dp, end = 8.dp, top = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Button(onClick = { DexController.back() }, modifier = Modifier.weight(1f)) { Text("Zurück") }
+            Button(onClick = { DexController.goHome() }, modifier = Modifier.weight(1f)) { Text("Home") }
+            OutlinedButton(onClick = { DexController.switchToPrevious() }, modifier = Modifier.weight(1f)) { Text("⇄ Apps") }
+            OutlinedButton(
+                onClick = { DexController.setCinema(!cinema) },
+                enabled = !wide,
+                modifier = Modifier.weight(1f),
+            ) { Text(if (cinema) "Kino aus" else "Kino") }
+        }
         Row(
             Modifier
                 .fillMaxWidth()
                 .padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Button(onClick = { DexController.back() }, modifier = Modifier.weight(1f)) { Text("Zurück") }
-            Button(onClick = { DexController.goHome() }, modifier = Modifier.weight(1f)) { Text("Home") }
             OutlinedButton(onClick = { DexController.lookRelative(-1) }, modifier = Modifier.weight(0.7f)) { Text("◀") }
             OutlinedButton(onClick = { DexController.recenter() }, modifier = Modifier.weight(1f)) { Text("Mitte") }
             OutlinedButton(onClick = { DexController.lookRelative(1) }, modifier = Modifier.weight(0.7f)) { Text("▶") }

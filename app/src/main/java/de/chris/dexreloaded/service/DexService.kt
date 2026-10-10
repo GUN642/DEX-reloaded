@@ -107,6 +107,12 @@ class DexService() : IDexService.Stub() {
             append("\n  #").append(id).append(' ').append(d.name)
             append(" flags=0x").append(Integer.toHexString(d.flags))
         }
+        val tasks = HiddenApi.getTasks()
+        append("\nAufgaben (").append(tasks.size).append("), Display und App:")
+        tasks.take(15).forEach { line ->
+            val f = line.split('|')
+            append("\n  ").append(f.getOrNull(1) ?: "?").append("  ").append(f.getOrNull(2) ?: line)
+        }
     }
 
     override fun injectTouch(displayId: Int, action: Int, x: Float, y: Float, downTime: Long) {
@@ -239,6 +245,21 @@ class DexService() : IDexService.Stub() {
     }
 
     override fun isRecording(): Boolean = recording
+
+    override fun takeScreenshot(displayId: Int, path: String): String {
+        java.io.File(path).parentFile?.mkdirs()
+        val target = physicalDisplayId(displayId)
+        val out = exec(listOf("/system/bin/screencap", "-d", target, "-p", path))
+        return if (java.io.File(path).length() > 0) "ok" else out.trim()
+    }
+
+    override fun getTasks(): String = HiddenApi.getTasks().joinToString("\n")
+
+    override fun moveTaskToFront(taskId: Int, component: String, displayId: Int): String {
+        val err = HiddenApi.moveTaskToFront(taskId) ?: return "ok"
+        if (component.isBlank()) return err
+        return launchApp(component, displayId, false)
+    }
 
     override fun focusDisplay(displayId: Int) {
         HiddenApi.focusDisplay(displayId)

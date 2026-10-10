@@ -15,6 +15,7 @@ import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
 import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
@@ -67,11 +68,45 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     @Volatile
     var headTracking = true
 
-    /** Bildschirm (0..2), auf den die Ansicht ohne Kopfdrehung zeigt. */
+    /** Bildschirm, auf den die Ansicht ohne Kopfdrehung zeigt. */
     @Volatile
     var lookIndex = 1
 
+    /** Aktive Bildschirme (siehe [ScreenLayout]). Im Breitbild zählen nur 0, 1, 2. */
+    @Volatile
+    var activeScreens: Set<Int> = ScreenLayout.BASE
+        set(value) {
+            field = value
+            geometryDirty = true
+        }
+
+    /** Kinomodus: nur dieser Bildschirm, fest im Raum vor dem Betrachter. -1 = aus. */
+    @Volatile
+    var cinemaScreen = -1
+        set(value) {
+            field = value
+            geometryDirty = true
+        }
+
+    /** Größe im Kinomodus relativ zum Sichtfeld. */
+    @Volatile
+    var cinemaSize = 0.85f
+        set(value) {
+            field = value
+            geometryDirty = true
+        }
+
+    private fun cinemaActive() = cinemaScreen >= 0 && !wideMode
+
+    /** Bildschirme, die gerade gezeichnet werden. */
+    private fun visibleScreens(): Collection<Int> = when {
+        cinemaActive() -> listOf(cinemaScreen)
+        wideMode -> ScreenLayout.BASE
+        else -> activeScreens
+    }
+
     private var yawOffset = 0f
+    private var pitchOffset = 0f
 
     /** Einrasten statt freiem Folgen (siehe [snapYaw]). */
     @Volatile
@@ -79,7 +114,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     private var snapIndex = -1
     private var snapLook = -1
-    private var snapCurrent = 0f
+    private var snapYawCur = 0f
+    private var snapPitchCur = 0f
 
     // ---- Zeiger und Fokus (vom Hauptthread gesetzt) ----
 
@@ -103,10 +139,11 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private var gazeScreen = -1
 
     /** Pixelgröße pro Bildschirm (für die Zeigerposition). */
-    private val pixelW = FloatArray(SCREEN_COUNT) { 1920f }
-    private val pixelH = FloatArray(SCREEN_COUNT) { 1080f }
-    private val panelCenter = FloatArray(SCREEN_COUNT)
-    private val panelHalfH = FloatArray(SCREEN_COUNT)
+    private val pixelW = FloatArray(MAX_SCREENS) { 1920f }
+    private val pixelH = FloatArray(MAX_SCREENS) { 1080f }
+    private val panelYaw = FloatArray(MAX_SCREENS)
+    private val panelPitch = FloatArray(MAX_SCREENS)
+    private val panelHalfH = FloatArray(MAX_SCREENS)
     private var panelHalfW = 1f
 
     private var programColor = 0
@@ -124,10 +161,10 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val glTasks = ConcurrentLinkedQueue<() -> Unit>()
 
-    private val panelAspect = FloatArray(SCREEN_COUNT) { 9f / 16f }
-    private val panels = arrayOfNulls<Panel>(SCREEN_COUNT)
-    private val testTextures = IntArray(SCREEN_COUNT)
-    /** Bildquellen: 0..2 Bildschirme, [BG_ID] Breitbild-Hintergrund, ab [WINDOW_ID_BASE] Fenster. */
+    private val panelAspect = FloatArray(MAX_SCREENS) { 9f / 16f }
+    private val panels = arrayOfNulls<Panel>(MAX_SCREENS)
+    private val testTextures = IntArray(MAX_SCREENS)
+    /** Bildquellen: 0..5 Bildschirme, [BG_ID] Breitbild-Hintergrund, ab [WINDOW_ID_BASE] Fenster. */
     private val streams = java.util.concurrent.ConcurrentHashMap<Int, Stream>()
 
     private var program2d = 0
@@ -143,6 +180,9 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     @Volatile
     var panelStepDeg = 0f
         private set
+
+    /** Senkrechter Abstand der Mitten (Bildschirm oben), in Grad. */
+    private var panelStepVDeg = 0f
 
     @Volatile
     private var geometryDirty = true
@@ -163,7 +203,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             val stream = Stream(tex, st, Surface(st))
             st.setOnFrameAvailableListener { stream.frameAvailable = true }
             streams[index] = stream
-            if (index in 0 until SCREEN_COUNT) {
+            if (index in 0 until MAX_SCREENS) {
                 pixelW[index] = width.toFloat()
                 pixelH[index] = height.toFloat()
                 if (panelAspect[index] != height.toFloat() / width) {
@@ -183,7 +223,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     /** Pixelgröße der Bildschirme im Breitbild (kein eigener Stream pro Bildschirm). */
     fun setPanelPixels(width: Int, height: Int) {
         runOnGl {
-            for (i in 0 until SCREEN_COUNT) {
+            for (i in 0 until MAX_SCREENS) {
                 pixelW[i] = width.toFloat()
                 pixelH[i] = height.toFloat()
                 if (panelAspect[i] != height.toFloat() / width) {
@@ -232,11 +272,51 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private var closeTexture = 0
     private var maxTexture = 0
 
+    // ---- Einblendungen (Benachrichtigung, App-Umschalter) ----
+
+    /** Bild über Bildschirm [screen], Rechteck in Pixeln dieses Bildschirms. */
+    class Overlay(val bitmap: android.graphics.Bitmap, val screen: Int, val x: Float, val y: Float, val w: Float, val h: Float)
+
+    private val overlays = arrayOfNulls<Overlay>(OVERLAY_SLOTS)
+    private val overlayTex = IntArray(OVERLAY_SLOTS)
+
+    /** Einblendung in [slot] setzen oder mit null entfernen. Das Bitmap gehört danach dem Renderer. */
+    fun setOverlay(slot: Int, overlay: Overlay?) {
+        runOnGl {
+            GlUtil.deleteTexture(overlayTex[slot])
+            overlayTex[slot] = 0
+            overlays[slot]?.bitmap?.recycle()
+            overlays[slot] = overlay
+            if (overlay != null) overlayTex[slot] = GlUtil.textureFromBitmap(overlay.bitmap)
+        }
+    }
+
+    private fun drawOverlays() {
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        for (slot in 0 until OVERLAY_SLOTS) {
+            val o = overlays[slot] ?: continue
+            val tex = overlayTex[slot]
+            if (tex == 0 || panels.getOrNull(o.screen) == null) continue
+            use2d(tex)
+            if (wideMode) {
+                val cx = o.screen * pixelW[0] + o.x
+                drawStrip(cx, o.y, cx + o.w, o.y + o.h, 0.996f)
+            } else {
+                fillQuad(o.screen, o.x, o.y, o.x + o.w, o.y + o.h, 0.996f)
+                drawPanel(Panel(dynamicVbo, 4))
+            }
+        }
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+    }
+
     fun detachStream(index: Int) {
         runOnGl { releaseStreamGl(index) }
     }
 
-    /** Dreht die Ansicht auf Bildschirm [index] (0..2). */
+    /** Dreht die Ansicht auf Bildschirm [index]. */
     fun lookAt(index: Int) {
         lookIndex = index
     }
@@ -272,12 +352,15 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         }
         titleTextures.clear()
         wallTexture = wallBitmap?.takeIf { !it.isRecycled }?.let { GlUtil.textureFromBitmap(it) } ?: 0
+        for (slot in 0 until OVERLAY_SLOTS) {
+            overlayTex[slot] = overlays[slot]?.bitmap?.takeIf { !it.isRecycled }?.let { GlUtil.textureFromBitmap(it) } ?: 0
+        }
         val vbo = IntArray(1)
         GLES30.glGenBuffers(1, vbo, 0)
         dynamicVbo = vbo[0]
         // Neuer Kontext: alte Puffer-IDs sind ungültig
         panels.fill(null)
-        for (i in 0 until SCREEN_COUNT) {
+        for (i in 0 until MAX_SCREENS) {
             val bmp = TestPattern.create(i)
             testTextures[i] = GlUtil.textureFromBitmap(bmp)
             bmp.recycle()
@@ -313,17 +396,23 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        // Blickrichtung: Kopf plus sanft angefahrener Versatz
-        val yawOffsetTarget = (lookIndex - (SCREEN_COUNT - 1) / 2f) * panelStepDeg
-        yawOffset += (yawOffsetTarget - yawOffset) * 0.2f
+        // Blickrichtung: Kopf plus sanft angefahrener Versatz. Kino: fest geradeaus.
+        val cinema = cinemaActive()
+        val look = lookIndex.coerceIn(0, MAX_SCREENS - 1)
+        val yawTarget = if (cinema) 0f else yawOf(look)
+        val pitchTarget = if (cinema) 0f else pitchOf(look)
+        yawOffset += (yawTarget - yawOffset) * 0.2f
+        pitchOffset += (pitchTarget - pitchOffset) * 0.2f
         var yaw = yawOffset
-        var pitch = 0f
+        var pitch = pitchOffset
         if (headTracking && HeadTracker.compute(head)) {
-            if (snapMode) {
-                yaw = snapYaw(yawOffsetTarget + head[0])
+            if (snapMode && !cinema) {
+                snapView(yawTarget + head[0], pitchTarget + head[1])
+                yaw = snapYawCur
+                pitch = snapPitchCur
             } else {
                 yaw += head[0]
-                pitch = head[1]
+                pitch += head[1]
             }
         } else {
             snapIndex = -1
@@ -335,7 +424,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         System.arraycopy(mvp, 0, view, 0, 16)
         Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
 
-        updateGaze(yaw)
+        if (!cinema) updateGaze(yaw, pitch)
 
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
         if (wideMode) {
@@ -350,7 +439,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
             drawWindows()
         } else {
-            for (i in 0 until SCREEN_COUNT) {
+            for (i in visibleScreens()) {
                 val panel = panels[i] ?: continue
                 val stream = streams[i]
                 if (stream != null && stream.hasFrame) useOes(stream) else use2d(testTextures[i])
@@ -358,6 +447,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
         }
         if (!wideMode) drawNavBar()
+        drawOverlays()
         drawPointer()
         GlUtil.checkError("onDrawFrame")
     }
@@ -396,7 +486,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glUniform4f(GLES30.glGetUniformLocation(currentProgram, "uUvRect"), u, v, su, sv)
     }
 
-    private fun canvasW() = pixelW[0] * SCREEN_COUNT
+    private fun canvasW() = pixelW[0] * WIDE_PANELS
 
     /** Punkt der Breitbildfläche (Pixel) auf dem Zylinder mit Radius [scale] um den Betrachter. */
     private fun canvasPoint(cx: Float, cy: Float, scale: Float, out: FloatArray, at: Int) {
@@ -490,31 +580,53 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
+    /** Gierwinkel und Nickwinkel der Mitte von Bildschirm [i], in Grad. */
+    private fun yawOf(i: Int) = ScreenLayout.col(i) * panelStepDeg
+    private fun pitchOf(i: Int) = ScreenLayout.row(i) * panelStepVDeg
+
+    /** Bildschirm, dessen Mitte dem Blick am nächsten liegt. */
+    private fun nearestScreen(yawDeg: Float, pitchDeg: Float): Int {
+        val sh = panelStepDeg.coerceAtLeast(1f)
+        val sv = panelStepVDeg.coerceAtLeast(1f)
+        var best = 1
+        var bestD = Float.MAX_VALUE
+        for (i in visibleScreens()) {
+            val dy = (yawDeg - yawOf(i)) / sh
+            val dp = (pitchDeg - pitchOf(i)) / sv
+            val d = dy * dy + dp * dp
+            if (d < bestD) {
+                bestD = d
+                best = i
+            }
+        }
+        return best
+    }
+
     /**
      * Einrasten: Das Bild steht still auf einem Bildschirm. Erst wenn der Blick deutlich
-     * (mehr als [SNAP_FACTOR] einer Bildschirmbreite) zur Seite geht, wechselt es sanft
-     * zum Nachbarn. Gibt den anzuzeigenden Gierwinkel zurück.
+     * (mehr als [SNAP_FACTOR] einer Bildschirmbreite bzw. -höhe) zur Seite geht, wechselt es
+     * sanft zum nächstgelegenen Bildschirm. Ergebnis in [snapYawCur] und [snapPitchCur].
      */
-    private fun snapYaw(gazeYaw: Float): Float {
-        val step = panelStepDeg
-        if (snapIndex < 0 || lookIndex != snapLook) {
+    private fun snapView(gazeYaw: Float, gazePitch: Float) {
+        if (snapIndex < 0 || lookIndex != snapLook || snapIndex !in visibleScreens()) {
             snapIndex = lookIndex
             snapLook = lookIndex
-            snapCurrent = (snapIndex - (SCREEN_COUNT - 1) / 2f) * step
+            snapYawCur = yawOf(snapIndex)
+            snapPitchCur = pitchOf(snapIndex)
         }
-        val center = (snapIndex - (SCREEN_COUNT - 1) / 2f) * step
-        if (gazeYaw > center + step * SNAP_FACTOR && snapIndex < SCREEN_COUNT - 1) snapIndex++
-        else if (gazeYaw < center - step * SNAP_FACTOR && snapIndex > 0) snapIndex--
-        val target = (snapIndex - (SCREEN_COUNT - 1) / 2f) * step
-        snapCurrent += (target - snapCurrent) * 0.2f
-        return snapCurrent
+        val dy = abs(gazeYaw - yawOf(snapIndex))
+        val dp = abs(gazePitch - pitchOf(snapIndex))
+        if (dy > panelStepDeg * SNAP_FACTOR || dp > panelStepVDeg * SNAP_FACTOR) {
+            snapIndex = nearestScreen(gazeYaw, gazePitch)
+        }
+        snapYawCur += (yawOf(snapIndex) - snapYawCur) * 0.2f
+        snapPitchCur += (pitchOf(snapIndex) - snapPitchCur) * 0.2f
     }
 
     /** Meldet, auf welchen Bildschirm die Blickmitte gerade zeigt. */
-    private fun updateGaze(yawDeg: Float) {
+    private fun updateGaze(yawDeg: Float, pitchDeg: Float) {
         if (panelStepDeg <= 0f) return
-        val idx = (yawDeg / panelStepDeg + (SCREEN_COUNT - 1) / 2f).let { Math.round(it) }
-            .coerceIn(0, SCREEN_COUNT - 1)
+        val idx = nearestScreen(yawDeg, pitchDeg)
         if (idx != gazeScreen) {
             gazeScreen = idx
             onGazeScreen?.let { cb -> mainHandler.post { cb(idx) } }
@@ -525,11 +637,16 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private fun panelPoint(i: Int, px: Float, py: Float, scale: Float, out: FloatArray, at: Int) {
         val x = (px / pixelW[i] * 2f - 1f) * panelHalfW
         val y = (1f - py / pixelH[i] * 2f) * panelHalfH[i]
-        val c = cos(panelCenter[i])
-        val sn = sin(panelCenter[i])
-        out[at] = (x * c + sn) * scale
-        out[at + 1] = y * scale
-        out[at + 2] = (x * sn - c) * scale
+        // Punkt (x, y, -1) erst um die Querachse nach oben kippen, dann um die Hochachse drehen
+        val cp = cos(panelPitch[i])
+        val sp = sin(panelPitch[i])
+        val y1 = y * cp + sp
+        val z1 = y * sp - cp
+        val c = cos(panelYaw[i])
+        val sn = sin(panelYaw[i])
+        out[at] = (x * c - z1 * sn) * scale
+        out[at + 1] = y1 * scale
+        out[at + 2] = (x * sn + z1 * c) * scale
     }
 
     /** Rechteck von (x0, y0) bis (x1, y1) in Pixeln auf Bildschirm [i] in [quad] schreiben. */
@@ -548,7 +665,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     /** Griff oder Leiste (Zurück, Home) unten in der Mitte des Bildschirms mit dem Zeiger. */
     private fun drawNavBar() {
         val i = pointerScreen
-        if (i !in 0 until SCREEN_COUNT || panels[i] == null || !streams.containsKey(i)) return
+        if (i !in 0 until MAX_SCREENS || panels[i] == null || !streams.containsKey(i)) return
         val w = pixelW[i]
         val h = pixelH[i]
         val tex: Int
@@ -571,7 +688,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     /** Mauszeiger als Pfeil, vor der Fläche, ohne Tiefentest. */
     private fun drawPointer() {
         val i = pointerScreen
-        if (i !in 0 until SCREEN_COUNT || panels[i] == null) return
+        if (i !in 0 until MAX_SCREENS || panels[i] == null) return
         val px = pointerX
         val py = pointerY
         val size = POINTER_PX * pixelH[i] / 1080f
@@ -600,7 +717,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         Matrix.perspectiveM(projection, 0, vfovDeg, aspect, 0.05f, 100f)
 
         // Bildschirm im Abstand 1: halbe Breite so, dass Größe 1 das Sichtfeld genau füllt
-        val halfW = tanH * size
+        val cinema = cinemaActive()
+        val halfW = tanH * (if (cinema) cinemaSize else size)
         val halfAngle = atan(halfW)
         val step = 2f * halfAngle + Math.toRadians(GAP_DEG.toDouble()).toFloat()
         // Breitbild: Pixelwinkel wie in der Mitte eines flachen Bildschirms, Bildschirmbreite als Bogen
@@ -608,30 +726,28 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         panelStepDeg = if (wideMode) Math.toDegrees((pixelAngle * pixelW[0]).toDouble()).toFloat()
         else Math.toDegrees(step.toDouble()).toFloat()
         panelHalfW = halfW
-        for (i in 0 until SCREEN_COUNT) {
-            val center = (i - (SCREEN_COUNT - 1) / 2f) * step
-            panelCenter[i] = center
+        val midHalfAngleV = atan(halfW * panelAspect[1])
+        panelStepVDeg = Math.toDegrees(2.0 * midHalfAngleV).toFloat()
+        val visible = visibleScreens()
+        for (i in 0 until MAX_SCREENS) {
+            panels[i]?.let { GLES30.glDeleteBuffers(1, intArrayOf(it.vbo), 0) }
+            panels[i] = null
+            if (i !in visible) continue
             panelHalfH[i] = halfW * panelAspect[i]
-            buildPanel(i, center, halfW, halfW * panelAspect[i])
+            panelYaw[i] = if (cinema) 0f else ScreenLayout.col(i) * step
+            // Oben: Unterkante stößt an die Oberkante der Mitte
+            panelPitch[i] = if (cinema || ScreenLayout.row(i) == 0) 0f else midHalfAngleV + atan(panelHalfH[i])
+            buildPanel(i)
         }
     }
 
-    /** Flache Fläche im Abstand 1, um [center] (Bogenmaß, positiv = rechts) gedreht. */
-    private fun buildPanel(index: Int, center: Float, halfW: Float, halfH: Float) {
-        panels[index]?.let { GLES30.glDeleteBuffers(1, intArrayOf(it.vbo), 0) }
-        val c = cos(center)
-        val s = sin(center)
+    /** Flache Fläche im Abstand 1 an der Stelle aus [panelYaw] und [panelPitch]. */
+    private fun buildPanel(index: Int) {
         val data = FloatArray(4 * 5)
-        var p = 0
-        for (col in 0..1) {
-            val u = col.toFloat()
-            val x = (u * 2f - 1f) * halfW
-            // Punkt (x, y, -1) um die Hochachse drehen, sodass die Fläche nach rechts wandert
-            val rx = x * c + s
-            val rz = x * s - c
-            data[p++] = rx; data[p++] = halfH; data[p++] = rz; data[p++] = u; data[p++] = 0f
-            data[p++] = rx; data[p++] = -halfH; data[p++] = rz; data[p++] = u; data[p++] = 1f
-        }
+        panelPoint(index, 0f, 0f, 1f, data, 0); data[3] = 0f; data[4] = 0f
+        panelPoint(index, 0f, pixelH[index], 1f, data, 5); data[8] = 0f; data[9] = 1f
+        panelPoint(index, pixelW[index], 0f, 1f, data, 10); data[13] = 1f; data[14] = 0f
+        panelPoint(index, pixelW[index], pixelH[index], 1f, data, 15); data[18] = 1f; data[19] = 1f
         val buf = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         buf.put(data).position(0)
         val vbo = IntArray(1)
@@ -664,12 +780,21 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     companion object {
         private const val TAG = "DexRenderer"
-        const val SCREEN_COUNT = 3
+        /** Höchstzahl der Bildschirme (siehe [ScreenLayout]). */
+        const val MAX_SCREENS = ScreenLayout.MAX
+
+        /** Breite der Breitbildfläche in Bildschirmen. */
+        const val WIDE_PANELS = 3
 
         // Bildschirme grenzen direkt aneinander
         private const val GAP_DEG = 0f
         private const val POINTER_PX = 40f
         private const val SNAP_FACTOR = 0.6f
+
+        /** Plätze für Einblendungen: Benachrichtigung, App-Umschalter. */
+        const val OVERLAY_TOAST = 0
+        const val OVERLAY_SWITCHER = 1
+        private const val OVERLAY_SLOTS = 2
 
         /** Bildquelle des Breitbild-Hintergrunds. */
         const val BG_ID = 10
