@@ -82,6 +82,7 @@ fun TrackpadScreen(onClose: () -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
             Button(onClick = { DexController.back() }, modifier = Modifier.weight(1f)) { Text("Zurück") }
+            Button(onClick = { DexController.goHome() }, modifier = Modifier.weight(1f)) { Text("Home") }
             OutlinedButton(onClick = { DexController.lookRelative(-1) }, modifier = Modifier.weight(0.7f)) { Text("◀") }
             OutlinedButton(onClick = { DexController.recenter() }, modifier = Modifier.weight(1f)) { Text("Mitte") }
             OutlinedButton(onClick = { DexController.lookRelative(1) }, modifier = Modifier.weight(0.7f)) { Text("▶") }

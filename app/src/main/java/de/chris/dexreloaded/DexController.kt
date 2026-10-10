@@ -13,6 +13,7 @@ import android.view.Display
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
+import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.imu.HeadTracker
 import de.chris.dexreloaded.imu.VitureImu
 import de.chris.dexreloaded.render.GlassPresentation
@@ -127,6 +128,7 @@ object DexController {
     var trackpadActive = false
 
     private val pending = mutableSetOf<Int>()
+    private var saveAppsLater = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     // Zeiger
@@ -166,7 +168,9 @@ object DexController {
             touchSpeed = prefs.getFloat("touchSpeed", 1.6f),
             mouseSpeed = prefs.getFloat("mouseSpeed", 1.3f),
         )
+        HomeStore.init(appContext)
         loadApps()
+        if (saveAppsLater) saveApps()
         renderer.onGazeScreen = ::onGazeScreen
         resetPointer(1)
         scope.launch {
@@ -362,7 +366,9 @@ object DexController {
         worker.execute {
             try {
                 log("Starte $component auf Display ${slot.displayId}")
-                val out = service.launchApp(component, slot.displayId, forceStop)
+                // Eigene App nie beenden, das würde auch die Arbeitsfläche schließen
+                val stop = forceStop && component.substringBefore('/') != appContext.packageName
+                val out = service.launchApp(component, slot.displayId, stop)
                 out.lines().filter { it.isNotBlank() }.forEach { log("  $it") }
                 _slots.update { it + (slot.index to slot.copy(component = component)) }
             } catch (e: Exception) {
@@ -405,11 +411,51 @@ object DexController {
 
     /** App für Bildschirm [index] merken und starten. */
     fun setScreenApp(index: Int, app: AppEntry) {
+        if (HomeStore.isHome(app.component)) {
+            // Den Startbildschirm gibt es nur einmal
+            val others = _screenApps.value.filter { (i, a) -> i != index && HomeStore.isHome(a.component) }.keys
+            others.forEach { clearScreen(it) }
+        }
         _screenApps.update { it + (index to app) }
-        _recentApps.update { list -> (listOf(app) + list.filter { it.component != app.component }).take(MAX_RECENT) }
+        addRecent(app)
         saveApps()
         val c = _screenConfig.value
         launchOnScreen(index, app.component, c.width, c.height, c.dpi, c.forceStop)
+    }
+
+    private fun addRecent(app: AppEntry) {
+        if (HomeStore.isHome(app.component)) return
+        _recentApps.update { list -> (listOf(app) + list.filter { it.component != app.component }).take(MAX_RECENT) }
+    }
+
+    /**
+     * App vom Startbildschirm aus öffnen. Auf dem Bildschirm des Startbildschirms liegt sie
+     * darüber, der Startbildschirm bleibt die Grundlage. Auf anderen Bildschirmen ersetzt sie die App.
+     */
+    fun openApp(index: Int, app: AppEntry) {
+        val base = _screenApps.value[index]
+        val slot = _slots.value[index]
+        if (base != null && HomeStore.isHome(base.component) && slot != null) {
+            addRecent(app)
+            saveApps()
+            setFocus(index)
+            startApp(slot, app.component, false)
+        } else {
+            setScreenApp(index, app)
+        }
+    }
+
+    /** Zum Startbildschirm: holt ihn nach vorn und dreht die Ansicht dorthin. */
+    fun goHome() {
+        val idx = _screenApps.value.entries.firstOrNull { HomeStore.isHome(it.value.component) }?.key
+        if (idx == null) {
+            log("Kein Startbildschirm eingerichtet. In „Bildschirme“ als App wählen.")
+            return
+        }
+        val slot = _slots.value[idx]
+        if (slot != null) startApp(slot, HomeStore.homeEntry(appContext).component, false)
+        else restoreScreens()
+        lookAt(idx)
     }
 
     /** Bildschirm leeren: virtuelles Display schließen, App vergessen. */
@@ -449,6 +495,16 @@ object DexController {
         if (apps.isEmpty()) {
             val comp = prefs.getString("component", null)
             if (comp != null) apps[1] = AppEntry(prefs.getString("label", null) ?: comp, comp.substringBefore('/'), comp)
+        }
+        // Ab 0.4.0: Startbildschirm einmalig auf Bildschirm 2, bisherige App dort wandert nach links
+        if (!prefs.getBoolean("homeMigrated", false)) {
+            val home = HomeStore.homeEntry(appContext)
+            val mid = apps[1]
+            if (mid != null && !HomeStore.isHome(mid.component) && apps[0] == null) apps[0] = mid
+            if (apps.values.none { HomeStore.isHome(it.component) }) apps[1] = home
+            prefs.edit().putBoolean("homeMigrated", true).apply()
+            _screenApps.value = apps
+            saveAppsLater = true
         }
         _screenApps.value = apps
         _recentApps.value = prefs.getString("recentApps", null)
@@ -616,6 +672,7 @@ object DexController {
                     KeyEvent.KEYCODE_DPAD_LEFT -> lookRelative(-1)
                     KeyEvent.KEYCODE_DPAD_RIGHT -> lookRelative(1)
                     KeyEvent.KEYCODE_C -> recenter()
+                    KeyEvent.KEYCODE_H -> goHome()
                     KeyEvent.KEYCODE_1 -> lookAt(0)
                     KeyEvent.KEYCODE_2 -> lookAt(1)
                     KeyEvent.KEYCODE_3 -> lookAt(2)
