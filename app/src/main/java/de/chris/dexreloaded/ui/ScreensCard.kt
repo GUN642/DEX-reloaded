@@ -19,9 +19,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import de.chris.dexreloaded.DexController
+import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.shizuku.ShizukuManager
 
 /** Drei Bildschirme mit je einer App, dazu Größe und Dichte der virtuellen Displays. */
@@ -34,6 +36,7 @@ fun ScreensCard() {
     val shown by DexController.presentationShown.collectAsState()
     val service by ShizukuManager.service.collectAsState()
     val gazeFollow by DexController.gazeFollow.collectAsState()
+    val context = LocalContext.current
     var picking by remember { mutableStateOf(-1) }
     var advanced by remember { mutableStateOf(false) }
 
@@ -42,6 +45,7 @@ fun ScreensCard() {
         AppPicker(
             title = "App für Bildschirm ${index + 1}",
             recent = recent,
+            extra = listOf(HomeStore.homeEntry(context)),
             onPick = {
                 DexController.setScreenApp(index, it)
                 picking = -1

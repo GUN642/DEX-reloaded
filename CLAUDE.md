@@ -119,6 +119,16 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 6. Trackpad ist ein Vollbild-Modus **in** `MainActivity` (keine eigene Activity), damit die Presentation sichtbar bleibt. `input/TrackpadView`: ein Finger bewegt, Tippen klickt, ruhig halten dann ziehen (langes Drücken), zwei Finger scrollen, drei Finger wischen wechselt den Bildschirm. Bluetooth-Maus per Pointer Capture. Bildschirm bleibt an, „Dunkel“ dimmt das Handy.
 7. Bluetooth-Tastatur: `MainActivity.dispatchKeyEvent` leitet bei offenem Trackpad Tasten von echten Geräten an den fokussierten Bildschirm. Kürzel: Strg+Alt+Links/Rechts (Bildschirm wechseln), Strg+Alt+1/2/3, Strg+Alt+C (zentrieren).
 
+## Startbildschirm (ab 0.4.0)
+
+1. Wunsch von Chris: der mittlere Bildschirm als Startbildschirm eines eigenen Systems (Statusleiste, Dock, Hintergrund).
+2. Umsetzung als eigene Activity `home/HomeActivity` (Compose), die wie jede App per `am start` auf ein virtuelles Display gelegt wird (exportiert, `singleTask`, eigene `taskAffinity`). Sie läuft im App-Prozess und ruft `DexController` direkt auf. Zeiger und Tastatur funktionieren dadurch wie bei jeder App.
+3. Inhalt: Statusleiste (Datum, Uhr, Brille und Tracking, Netz, Handy-Akku), große Uhr, „Zuletzt genutzt“, Dock mit angehefteten Apps (`dockApps`) und „Alle Apps“ mit Suche. Gedrückt halten auf ein Icon: auf Bildschirm 1, 2 oder 3 öffnen, ans Dock heften oder lösen.
+4. Der Startbildschirm ist als App „Startbildschirm“ (Gruppe „DEX reloaded“) in der App-Auswahl wählbar, aber nur auf einem Bildschirm. Auf seinem Bildschirm öffnen Apps darüber, er bleibt die Grundlage. Zurück mit „Home“ im Trackpad oder Strg+Alt+H.
+5. Einmalige Umstellung (`homeMigrated`): Startbildschirm auf Bildschirm 2, die bisherige App von Bildschirm 2 wandert auf Bildschirm 1, falls der leer ist.
+6. Hintergrundbild: per Fotoauswahl auf dem Handy, auf 1920x1080 zugeschnitten in `files/wallpaper.jpg`. „Vom Handy“ versucht `WallpaperManager`, das verweigert Android meist. Sonst Standardverlauf.
+7. Eigene App wird nie per `force-stop` beendet.
+
 ## Stand
 
-Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). Gerätetest 0.3.0: Trackpad gut, etwas zu empfindlich, Halten und Ziehen geht. Maus und Tastatur noch ungetestet. 0.3.1: Bildschirme ohne Lücke, Fokusrahmen dünn und rot, Zeigergeschwindigkeit für Trackpad und Maus einstellbar (Standard Trackpad 1,6, Maus 1,3).
+Phase 1 auf dem Gerät bestätigt. Gerätetest 0.2.0: Ansicht folgt richtig (nach Ausrichten: hoch +Y, rechts +X), kaum Drift, Pose-Rate etwa 200 Hz. Leichtes Stottern und unscharfer Text während der Drehung, 0.2.1 bringt dafür One-Euro-Filter und höchste Bildwiederholrate (noch ungetestet). Gerätetest 0.3.0: Trackpad gut, etwas zu empfindlich, Halten und Ziehen geht. Maus und Tastatur noch ungetestet. 0.3.1: Bildschirme ohne Lücke, Fokusrahmen dünn und rot, Zeigergeschwindigkeit für Trackpad und Maus einstellbar (Standard Trackpad 1,6, Maus 1,3), Knopf „Tastatur“ im Trackpad. 0.4.0: Startbildschirm, wartet auf Gerätetest. Maus und Tastatur weiter ungetestet.

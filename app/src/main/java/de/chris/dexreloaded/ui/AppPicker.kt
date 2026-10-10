@@ -44,6 +44,7 @@ fun AppPicker(
     onDismiss: () -> Unit,
     title: String = "App wählen",
     recent: List<AppEntry> = emptyList(),
+    extra: List<AppEntry> = emptyList(),
 ) {
     val context = LocalContext.current
     val apps by produceState<List<AppEntry>?>(initialValue = null) {
@@ -77,7 +78,14 @@ fun AppPicker(
                     }
                     val installed = list.map { it.component }.toSet()
                     val recentShown = if (query.isBlank()) recent.filter { it.component in installed } else emptyList()
+                    val extraShown = extra.filter { query.isBlank() || it.label.contains(query, ignoreCase = true) }
                     LazyColumn(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (extraShown.isNotEmpty()) {
+                            item(key = "h-extra") { Header("DEX reloaded") }
+                            items(extraShown, key = { "x-" + it.component }) { app ->
+                                AppRow(app) { onPick(app) }
+                            }
+                        }
                         if (recentShown.isNotEmpty()) {
                             item(key = "h-recent") { Header("Zuletzt genutzt") }
                             items(recentShown, key = { "r-" + it.component }) { app ->
