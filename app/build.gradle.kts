@@ -13,8 +13,8 @@ android {
         minSdk = 31
         targetSdk = 36
         // Bei jeder Änderung hochsetzen. Das Release-Tag kommt aus versionName.
-        versionCode = 11
-        versionName = "0.4.3"
+        versionCode = 12
+        versionName = "0.5.0"
         // App-Name mit Version, z. B. "DEX reloaded 0.1.2"
         resValue("string", "app_name", "DEX reloaded $versionName")
     }

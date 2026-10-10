@@ -52,6 +52,10 @@ class DexService() : IDexService.Stub() {
         return id
     }
 
+    override fun resizeVirtualDisplay(displayId: Int, width: Int, height: Int, dpi: Int) {
+        displays[displayId]?.resize(width, height, dpi)
+    }
+
     override fun releaseVirtualDisplay(displayId: Int) {
         displays.remove(displayId)?.release()
     }

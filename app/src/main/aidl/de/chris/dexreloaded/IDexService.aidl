@@ -35,4 +35,7 @@ interface IDexService {
 
     // Holt den Systemfokus auf das Display (z. B. 0 = Handy), damit die Maus dort bleibt.
     oneway void focusDisplay(int displayId) = 10;
+
+    // Größe eines virtuellen Displays ändern (Fenster im Breitbild).
+    void resizeVirtualDisplay(int displayId, int width, int height, int dpi) = 11;
 }
