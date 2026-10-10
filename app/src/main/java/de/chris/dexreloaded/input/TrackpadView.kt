@@ -8,7 +8,9 @@ import android.graphics.Paint
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.text.Editable
 import android.text.InputType
+import android.text.Selection
 import android.view.HapticFeedbackConstants
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -17,6 +19,8 @@ import android.view.View
 import android.view.WindowInsets
 import android.view.inputmethod.BaseInputConnection
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.ExtractedText
+import android.view.inputmethod.ExtractedTextRequest
 import android.view.inputmethod.InputConnection
 import android.view.inputmethod.InputMethodManager
 import de.chris.dexreloaded.DexController
@@ -218,60 +222,196 @@ class TrackpadView(context: Context) : View(context) {
 
     private var keyboardShown = false
 
+    /**
+     * Spiegel des Textes, den die Handy-Tastatur in der Ziel-App geschrieben hat. Die Tastatur
+     * liest ihn für Vorschläge und Korrekturen (Text vor dem Cursor). Jede Änderung daran geht
+     * als Differenz an die Brille: löschen und neu tippen.
+     */
+    private val shadow: Editable = Editable.Factory.getInstance().newEditable("")
+
+    /** Stand, der bereits an die Ziel-App geschickt ist. */
+    private var sentText = ""
+    private var sentCursor = 0
+    private var batchDepth = 0
+
+    init {
+        Selection.setSelection(shadow, 0)
+    }
+
     override fun onCheckIsTextEditor(): Boolean = keyboardShown
 
     override fun onCreateInputConnection(outAttrs: EditorInfo): InputConnection {
-        // Normales Textfeld mit Vorschlägen und Autokorrektur. Zwischentexte (Composing) werden
-        // in ForwardingConnection als Differenz weitergegeben: Löschen und neu Tippen.
+        // Normales Textfeld mit Vorschlägen und Autokorrektur
         outAttrs.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_AUTO_CORRECT or
             InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
         outAttrs.imeOptions = EditorInfo.IME_FLAG_NO_EXTRACT_UI or EditorInfo.IME_FLAG_NO_FULLSCREEN or
             EditorInfo.IME_ACTION_NONE
-        return ForwardingConnection(this)
+        outAttrs.initialSelStart = Selection.getSelectionStart(shadow)
+        outAttrs.initialSelEnd = Selection.getSelectionEnd(shadow)
+        outAttrs.setInitialSurroundingText(shadow)
+        batchDepth = 0
+        return ForwardingConnection()
     }
 
-    /** Leitet alles von der Handy-Tastatur an den fokussierten Bildschirm weiter. */
-    private class ForwardingConnection(view: View) : BaseInputConnection(view, false) {
-        private var composing = ""
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        DexController.onTextContextLost = { post { resetText() } }
+        requestFocus()
+        if (hasWindowFocus()) requestPointerCapture()
+    }
 
-        override fun commitText(text: CharSequence, newCursorPosition: Int): Boolean {
-            replaceComposing(text.toString())
-            composing = ""
+    /** Puffer leeren, z. B. nach einem Klick in der Brille. Die Tastatur fängt neu an. */
+    private fun resetText() {
+        if (shadow.isEmpty() && sentText.isEmpty()) return
+        shadow.clear()
+        Selection.setSelection(shadow, 0)
+        sentText = ""
+        sentCursor = 0
+        if (keyboardShown) context.getSystemService(InputMethodManager::class.java).restartInput(this)
+    }
+
+    /**
+     * Bringt die Ziel-App auf den Stand des Puffers. Gemeinsamen Anfang und Ende behalten,
+     * den Rest löschen und neu tippen. Steht der Cursor am Ende (der Normalfall), sind keine
+     * Pfeiltasten nötig.
+     */
+    private fun syncText() {
+        if (batchDepth > 0) return
+        val now = shadow.toString()
+        val cur = Selection.getSelectionEnd(shadow).let { if (it < 0) now.length else it.coerceIn(0, now.length) }
+        if (now != sentText || cur != sentCursor) {
+            val old = sentText
+            var p = 0
+            while (p < old.length && p < now.length && old[p] == now[p]) p++
+            var s = 0
+            val maxS = minOf(old.length - p, now.length - p, old.length - sentCursor, now.length - cur)
+            while (s < maxS && old[old.length - 1 - s] == now[now.length - 1 - s]) s++
+            val oldEnd = old.length - s
+            val newEnd = now.length - s
+            var at = sentCursor
+            if (oldEnd > p || newEnd > p) {
+                moveCursor(at, oldEnd)
+                repeat(oldEnd - p) { DexController.sendKey(KeyEvent.KEYCODE_DEL) }
+                if (newEnd > p) DexController.typeText(now.substring(p, newEnd))
+                at = newEnd
+            }
+            moveCursor(at, cur)
+            sentText = now
+            sentCursor = cur
+        }
+        reportSelection()
+    }
+
+    private fun moveCursor(from: Int, to: Int) {
+        val key = if (to < from) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT
+        repeat(abs(to - from)) { DexController.sendKey(key) }
+    }
+
+    /** Wie ein normales Textfeld der Tastatur Cursor und Zwischentext melden. */
+    private fun reportSelection() {
+        if (!keyboardShown) return
+        context.getSystemService(InputMethodManager::class.java).updateSelection(
+            this,
+            Selection.getSelectionStart(shadow),
+            Selection.getSelectionEnd(shadow),
+            BaseInputConnection.getComposingSpanStart(shadow),
+            BaseInputConnection.getComposingSpanEnd(shadow),
+        )
+    }
+
+    /**
+     * Echtes Textfeld (fullEditor) auf dem Puffer. Die Tastatur sieht den bisherigen Text und
+     * kann Wörter korrigieren. Nach jeder Änderung gleicht [syncText] die Ziel-App ab.
+     */
+    private inner class ForwardingConnection : BaseInputConnection(this@TrackpadView, true) {
+
+        override fun getEditable(): Editable = shadow
+
+        override fun beginBatchEdit(): Boolean {
+            batchDepth++
             return true
         }
 
-        override fun setComposingText(text: CharSequence, newCursorPosition: Int): Boolean {
-            replaceComposing(text.toString())
-            composing = text.toString()
-            return true
+        override fun endBatchEdit(): Boolean {
+            if (batchDepth > 0) batchDepth--
+            syncText()
+            return batchDepth > 0
         }
 
-        override fun finishComposingText(): Boolean {
-            composing = ""
-            return true
-        }
+        override fun commitText(text: CharSequence, newCursorPosition: Int) =
+            super.commitText(text, newCursorPosition).also { syncText() }
 
-        /** Ersetzt den bisherigen Zwischentext durch [text]: gemeinsamen Anfang behalten, Rest löschen und neu tippen. */
-        private fun replaceComposing(text: String) {
-            var common = 0
-            while (common < composing.length && common < text.length && composing[common] == text[common]) common++
-            repeat(composing.length - common) { DexController.sendKey(KeyEvent.KEYCODE_DEL) }
-            if (common < text.length) DexController.typeText(text.substring(common))
-        }
+        override fun setComposingText(text: CharSequence, newCursorPosition: Int) =
+            super.setComposingText(text, newCursorPosition).also { syncText() }
 
-        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int): Boolean {
-            repeat(beforeLength) { DexController.sendKey(KeyEvent.KEYCODE_DEL) }
-            repeat(afterLength) { DexController.sendKey(KeyEvent.KEYCODE_FORWARD_DEL) }
-            return true
-        }
+        override fun setComposingRegion(start: Int, end: Int) =
+            super.setComposingRegion(start, end).also { syncText() }
+
+        override fun finishComposingText() =
+            super.finishComposingText().also { syncText() }
+
+        override fun deleteSurroundingText(beforeLength: Int, afterLength: Int) =
+            super.deleteSurroundingText(beforeLength, afterLength).also { syncText() }
+
+        override fun deleteSurroundingTextInCodePoints(beforeLength: Int, afterLength: Int) =
+            super.deleteSurroundingTextInCodePoints(beforeLength, afterLength).also { syncText() }
+
+        override fun setSelection(start: Int, end: Int) =
+            super.setSelection(start, end).also { syncText() }
+
+        override fun commitCompletion(text: android.view.inputmethod.CompletionInfo) =
+            super.commitCompletion(text).also { syncText() }
+
+        override fun commitCorrection(correctionInfo: android.view.inputmethod.CorrectionInfo) =
+            super.commitCorrection(correctionInfo).also { syncText() }
+
+        override fun getExtractedText(request: ExtractedTextRequest?, flags: Int): ExtractedText =
+            ExtractedText().apply {
+                text = shadow.toString()
+                startOffset = 0
+                partialStartOffset = -1
+                partialEndOffset = -1
+                selectionStart = Selection.getSelectionStart(shadow)
+                selectionEnd = Selection.getSelectionEnd(shadow)
+            }
 
         override fun sendKeyEvent(event: KeyEvent): Boolean {
-            if (event.action == KeyEvent.ACTION_DOWN) DexController.sendKey(event.keyCode, event.metaState)
+            if (event.action != KeyEvent.ACTION_DOWN) return true
+            val start = Selection.getSelectionStart(shadow)
+            val end = Selection.getSelectionEnd(shadow)
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DEL -> if (end > 0) {
+                    // Im Puffer löschen, syncText schickt die Taste
+                    if (start != end) shadow.delete(minOf(start, end), maxOf(start, end))
+                    else shadow.delete(end - 1, end)
+                    BaseInputConnection.removeComposingSpans(shadow)
+                    syncText()
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_LEFT -> if (end > 0) {
+                    Selection.setSelection(shadow, end - 1)
+                    syncText()
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> if (end < shadow.length) {
+                    Selection.setSelection(shadow, end + 1)
+                    syncText()
+                    return true
+                }
+                KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                    DexController.sendKey(event.keyCode, event.metaState)
+                    post { resetText() }
+                    return true
+                }
+            }
+            // Puffer kennt die Wirkung nicht: Taste direkt weitergeben
+            DexController.sendKey(event.keyCode, event.metaState)
             return true
         }
 
         override fun performEditorAction(actionCode: Int): Boolean {
             DexController.sendKey(KeyEvent.KEYCODE_ENTER)
+            post { resetText() }
             return true
         }
     }
@@ -284,13 +424,8 @@ class TrackpadView(context: Context) : View(context) {
         if (hasWindowFocus) requestPointerCapture() else DexController.onTrackpadFocusLost()
     }
 
-    override fun onAttachedToWindow() {
-        super.onAttachedToWindow()
-        requestFocus()
-        if (hasWindowFocus()) requestPointerCapture()
-    }
-
     override fun onDetachedFromWindow() {
+        DexController.onTextContextLost = null
         mainHandler.removeCallbacks(holdRunnable)
         if (mouseButtonDown) mouseRelease()
         releasePointerCapture()
