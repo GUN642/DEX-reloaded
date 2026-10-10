@@ -69,7 +69,7 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 
 ## Build und Auslieferung (wie in Chris' anderen Projekten)
 
-1. Workflow `.github/workflows/build-apk.yml`, startet bei Push auf `main` sowie von Hand. Änderungen nur an `.md`-Dateien lösen keinen Bau aus (`paths-ignore: "**.md"`). `concurrency` bricht ältere laufende Bauten ab.
+1. Workflow `.github/workflows/build-apk.yml`, startet bei Push auf `main` sowie von Hand. Pushes auf andere Branches werden nur gebaut (Kontrolle und Artefakt, Debug-Signatur falls kein Keystore), ein Release entsteht nur von `main`. Grund: In der Claude-Code-Umgebung gibt es kein Android-SDK, der Bau wird über Actions geprüft. Änderungen nur an `.md`-Dateien lösen keinen Bau aus (`paths-ignore: "**.md"`). `concurrency` bricht ältere laufende Bauten ab.
 2. Ergebnis ist ein **GitHub Release** mit fertiger APK. Dateiname immer gleich: `DEX-reloaded.apk`, ohne Versionsnummer.
 3. **Bei jeder Änderung `versionCode` und `versionName` hochsetzen.** Das Release-Tag kommt aus der Version.
 4. Feste Signatur, damit Updates über die installierte Version gehen. Keystore einmalig erzeugen und als Repository-Secret hinterlegen. Chris dabei genau sagen, welche Secrets er anlegen muss.
@@ -81,6 +81,25 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 3. Chris testet auf dem Gerät und meldet Ergebnisse. Unklare Gerätezustände über die Debug-Ansicht klären statt zu raten.
 4. Diese Datei bei Architekturentscheidungen und Phasenfortschritt aktuell halten.
 
+## Technische Festlegungen (Phase 1)
+
+1. Paket und `applicationId`: `de.chris.dexreloaded`. Nicht mehr ändern, sonst gehen Updates nicht.
+2. Versionen: AGP 8.13.0, Gradle 8.14.3, Kotlin 2.2.21, Compose BOM 2025.08.00, Shizuku 13.1.5, `compileSdk`/`targetSdk` 36.
+3. Signatur-Secrets: `KEYSTORE_BASE64`, `KEYSTORE_PASSWORD`, `KEY_ALIAS` (`dexreloaded`), `KEY_PASSWORD`.
+4. Aufbau des Codes:
+   1. `service/DexService.kt`: Shizuku-UserService (AIDL `IDexService`), legt virtuelle Displays an, startet Apps per `am start --display`.
+   2. `service/HiddenApi.kt`: alle versteckten APIs. `ShellContext` gibt sich als `com.android.shell` aus, `DisplayManager(Context)` per Reflection, Flags wie scrcpy `--new-display`. Ohne Rechte für die vollen Flags Rückfall auf Grundflags.
+   3. `shizuku/ShizukuManager.kt`: Status (nicht installiert, nicht gestartet, Berechtigung, Dienst) und Bindung.
+   4. `render/`: `GlassPresentation` mit `GLSurfaceView` (ES 3), `WorkspaceRenderer` mit drei Flächen auf einem Zylinder (Radius 4, Breite 1,6). Eine Fläche zeigt entweder ein Testbild oder eine `SurfaceTexture` (OES) eines virtuellen Displays. GL-Aufgaben laufen über eine Warteschlange in `onDrawFrame`.
+   5. `DexController.kt`: Brille finden (Kategorie Presentation, Typ extern bevorzugt, eigene virtuelle Displays ausgeschlossen), Presentation, Bildschirm-Slots, Protokoll.
+   6. `ui/`: Compose-Oberfläche, App-Auswahl, Debug-Ansicht mit Kopierknopf.
+5. Die Presentation hängt an `MainActivity`. Wird sie geschlossen, werden alle virtuellen Displays freigegeben.
+6. Virtuelle Displays laufen ohne Systemdekoration (kein Launcher, keine Bildschirmtastatur dort).
+
 ## Stand
 
-Repository angelegt, nur diese Datei vorhanden. Wartet auf LOS.
+Phase 1 umgesetzt, wartet auf Gerätetest durch Chris. Offene Punkte zum Prüfen:
+1. Erscheint die Brille im Spiegelmodus in der Kategorie Presentation, und liegt die Presentation sauber über dem gespiegelten Bild?
+2. Gehen die vollen scrcpy-Flags unter One UI 8 (siehe Protokoll und Debug-Ansicht)?
+3. Startet die gewählte App auf dem virtuellen Display, auch wenn sie schon auf dem Handy läuft?
+4. VID und PID der Brille aus der Debug-Ansicht notieren.
