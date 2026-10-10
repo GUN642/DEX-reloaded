@@ -222,7 +222,7 @@ private fun networkName(context: Context): String {
     }
 }
 
-// ---- Mitte: Uhr und zuletzt genutzt ----
+// ---- Mitte: Uhr ----
 
 @Composable
 private fun Center(screen: () -> Int) {
@@ -233,7 +233,6 @@ private fun Center(screen: () -> Int) {
             delay(5_000)
         }
     }
-    val recent by DexController.recentApps.collectAsState()
     Column(
         Modifier
             .fillMaxSize()
@@ -253,19 +252,6 @@ private fun Center(screen: () -> Int) {
             fontSize = 22.sp,
         )
         Spacer(Modifier.weight(1f))
-        if (recent.isNotEmpty()) {
-            Text("Zuletzt genutzt", color = Color(0xCCFFFFFF), fontSize = 14.sp)
-            Spacer(Modifier.height(8.dp))
-            Row(
-                Modifier
-                    .clip(RoundedCornerShape(20.dp))
-                    .background(Color(0x55000000))
-                    .padding(12.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                for (app in recent.take(8)) AppIcon(app, screen, iconSize = 56, showLabel = true)
-            }
-        }
     }
 }
 

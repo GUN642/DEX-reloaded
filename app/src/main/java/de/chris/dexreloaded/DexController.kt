@@ -95,7 +95,14 @@ object DexController {
     val lookIndex: StateFlow<Int> = _lookIndex.asStateFlow()
 
     /** Größe und Dichte der virtuellen Displays (für alle drei gleich). */
-    data class ScreenConfig(val width: Int = 1920, val height: Int = 1080, val dpi: Int = 240, val forceStop: Boolean = false)
+    data class ScreenConfig(
+        val width: Int = 1920,
+        val height: Int = 1080,
+        val dpi: Int = 240,
+        val forceStop: Boolean = false,
+        /** Variante aus 0.4.2: Displays holen den Fokus gar nicht erst (brach dort die Klicks). */
+        val keepPhoneFocus: Boolean = false,
+    )
 
     private val _screenConfig = MutableStateFlow(ScreenConfig())
     val screenConfig: StateFlow<ScreenConfig> = _screenConfig.asStateFlow()
@@ -166,6 +173,7 @@ object DexController {
             height = prefs.getInt("height", 1080),
             dpi = prefs.getInt("dpi", 240),
             forceStop = prefs.getBoolean("forceStop", false),
+            keepPhoneFocus = prefs.getBoolean("keepPhoneFocus", false),
         )
         _gazeFollow.value = prefs.getBoolean("gazeFollow", true)
         _inputSettings.value = InputSettings(
@@ -352,7 +360,9 @@ object DexController {
         renderer.attachStream(index, width, height) { surface ->
             worker.execute {
                 try {
-                    val id = service.createVirtualDisplay("$VD_PREFIX-${index + 1}", width, height, dpi, surface)
+                    val id = service.createVirtualDisplay(
+                        "$VD_PREFIX-${index + 1}", width, height, dpi, surface, _screenConfig.value.keepPhoneFocus,
+                    )
                     val slot = ScreenSlot(index, id, width, height, dpi, null)
                     _slots.update { it + (index to slot) }
                     log("Virtuelles Display $id für Bildschirm ${index + 1} bereit")
@@ -407,6 +417,7 @@ object DexController {
             .putInt("height", config.height)
             .putInt("dpi", config.dpi)
             .putBoolean("forceStop", config.forceStop)
+            .putBoolean("keepPhoneFocus", config.keepPhoneFocus)
             .apply()
     }
 
@@ -620,6 +631,17 @@ object DexController {
         dragScreen = pointerScreen
         dragDownTime = SystemClock.uptimeMillis()
         svc.injectTouch(slot.displayId, MotionEvent.ACTION_DOWN, pointerX, pointerY, dragDownTime)
+        requestPhoneFocus()
+    }
+
+    /**
+     * Ein Klick auf der Brille holt den Systemfokus auf das virtuelle Display. Dann verliert
+     * das Handy die Maus. Darum kurz danach den Fokus zurück aufs Handy holen.
+     */
+    private fun requestPhoneFocus() {
+        if (_screenConfig.value.keepPhoneFocus || !trackpadActive) return
+        val svc = ShizukuManager.service.value ?: return
+        main.postDelayed({ runCatching { svc.focusDisplay(Display.DEFAULT_DISPLAY) } }, 60)
     }
 
     fun pointerUp() {

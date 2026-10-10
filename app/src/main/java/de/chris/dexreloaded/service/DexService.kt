@@ -43,8 +43,9 @@ class DexService() : IDexService.Stub() {
         height: Int,
         dpi: Int,
         surface: Surface,
+        keepPhoneFocus: Boolean,
     ): Int {
-        val vd = HiddenApi.createVirtualDisplay(context, name, width, height, dpi, surface)
+        val vd = HiddenApi.createVirtualDisplay(context, name, width, height, dpi, surface, keepPhoneFocus)
         val id = vd.display.displayId
         displays[id] = vd
         Log.i(TAG, "Virtuelles Display $id angelegt (${width}x$height, $dpi dpi)")
@@ -91,6 +92,10 @@ class DexService() : IDexService.Stub() {
         append("Flags beim Anlegen: 0x").append(Integer.toHexString(HiddenApi.lastFlags))
         if (HiddenApi.lastFlags and HiddenApi.VIRTUAL_DISPLAY_FLAG_STEAL_TOP_FOCUS_DISABLED != 0) append(" (Fokus bleibt am Handy)")
         append('\n')
+        append("Eingaben: ").append(HiddenApi.injectOk).append(" ok, ").append(HiddenApi.injectFailed).append(" fehlgeschlagen")
+        HiddenApi.lastInjectError?.let { append(" (").append(it).append(')') }
+        append('\n')
+        HiddenApi.lastFocusResult?.let { append("Fokus zurück: ").append(it).append('\n') }
         append("Virtuelle Displays: ")
         if (displays.isEmpty()) append("keine")
         displays.forEach { (id, vd) ->
@@ -155,6 +160,10 @@ class DexService() : IDexService.Stub() {
             KeyCharacterMap.VIRTUAL_KEYBOARD, 0, 0, InputDevice.SOURCE_KEYBOARD,
         )
         HiddenApi.inject(ev, displayId)
+    }
+
+    override fun focusDisplay(displayId: Int) {
+        HiddenApi.focusDisplay(displayId)
     }
 
     private fun exec(cmd: List<String>): String {

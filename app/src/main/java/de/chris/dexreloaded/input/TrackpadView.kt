@@ -288,8 +288,13 @@ class TrackpadView(context: Context) : View(context) {
     override fun onPointerCaptureChange(hasCapture: Boolean) {
         super.onPointerCaptureChange(hasCapture)
         if (!hasCapture && mouseButtonDown) {
-            mouseButtonDown = false
-            DexController.pointerUp()
+            // Der Fokus kommt gleich zurück. Kommt er nicht, die Taste loslassen.
+            mainHandler.postDelayed({
+                if (mouseButtonDown && !hasPointerCapture()) {
+                    mouseButtonDown = false
+                    DexController.pointerUp()
+                }
+            }, 800)
         }
     }
 
