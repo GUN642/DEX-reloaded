@@ -101,6 +101,17 @@ class TrackpadView(context: Context) : View(context) {
 
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouchEvent(e: MotionEvent): Boolean {
+        // Maus ohne Pointer Capture (Zugriff kurz verloren): trotzdem auswerten und Zugriff neu holen
+        if (e.isFromSource(InputDevice.SOURCE_MOUSE)) {
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    requestPointerCapture()
+                    if (e.buttonState and MotionEvent.BUTTON_SECONDARY != 0) DexController.back() else mousePress()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> mouseRelease()
+            }
+            return true
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastX = e.x; lastY = e.y
@@ -268,7 +279,8 @@ class TrackpadView(context: Context) : View(context) {
 
     override fun onWindowFocusChanged(hasWindowFocus: Boolean) {
         super.onWindowFocusChanged(hasWindowFocus)
-        if (hasWindowFocus) requestPointerCapture()
+        DexController.trackpadFocused = hasWindowFocus
+        if (hasWindowFocus) requestPointerCapture() else DexController.onTrackpadFocusLost()
     }
 
     override fun onAttachedToWindow() {
@@ -279,7 +291,7 @@ class TrackpadView(context: Context) : View(context) {
 
     override fun onDetachedFromWindow() {
         mainHandler.removeCallbacks(holdRunnable)
-        if (mouseButtonDown) DexController.pointerUp()
+        if (mouseButtonDown) mouseRelease()
         releasePointerCapture()
         super.onDetachedFromWindow()
     }
@@ -288,13 +300,15 @@ class TrackpadView(context: Context) : View(context) {
     override fun onPointerCaptureChange(hasCapture: Boolean) {
         super.onPointerCaptureChange(hasCapture)
         if (!hasCapture && mouseButtonDown) {
-            // Der Fokus kommt gleich zurück. Kommt er nicht, die Taste loslassen.
-            mainHandler.postDelayed({
-                if (mouseButtonDown && !hasPointerCapture()) {
-                    mouseButtonDown = false
-                    DexController.pointerUp()
-                }
-            }, 800)
+            if (!mouseDragging) {
+                // Noch nichts an die Brille geschickt: als Klick werten
+                mouseRelease()
+            } else {
+                // Beim Ziehen kurz auf die Rückkehr des Zugriffs warten, sonst loslassen
+                mainHandler.postDelayed({
+                    if (mouseButtonDown && !hasPointerCapture()) mouseRelease()
+                }, 400)
+            }
         }
     }
 
@@ -308,24 +322,57 @@ class TrackpadView(context: Context) : View(context) {
                     dx += e.getHistoricalX(h)
                     dy += e.getHistoricalY(h)
                 }
-                if (dx != 0f || dy != 0f) DexController.movePointer(accel(dx, mouseSpeed), accel(dy, mouseSpeed))
+                if (dx != 0f || dy != 0f) {
+                    if (mouseButtonDown && !mouseDragging) {
+                        mouseMoved += abs(dx) + abs(dy)
+                        if (mouseMoved > DRAG_SLOP_PX) startMouseDrag()
+                    }
+                    DexController.movePointer(accel(dx, mouseSpeed), accel(dy, mouseSpeed))
+                }
             }
             MotionEvent.ACTION_BUTTON_PRESS -> when (e.actionButton) {
-                MotionEvent.BUTTON_PRIMARY -> {
-                    mouseButtonDown = true
-                    DexController.pointerDown()
-                }
+                MotionEvent.BUTTON_PRIMARY -> mousePress()
                 MotionEvent.BUTTON_SECONDARY, MotionEvent.BUTTON_BACK -> DexController.back()
             }
-            MotionEvent.ACTION_BUTTON_RELEASE -> if (e.actionButton == MotionEvent.BUTTON_PRIMARY && mouseButtonDown) {
-                mouseButtonDown = false
-                DexController.pointerUp()
-            }
+            MotionEvent.ACTION_BUTTON_RELEASE -> if (e.actionButton == MotionEvent.BUTTON_PRIMARY) mouseRelease()
             MotionEvent.ACTION_SCROLL -> {
                 DexController.scroll(e.getAxisValue(MotionEvent.AXIS_HSCROLL), e.getAxisValue(MotionEvent.AXIS_VSCROLL))
             }
         }
         return true
+    }
+
+    // ---- Maustaste: Klick erst beim Loslassen ----
+
+    private var mouseDragging = false
+    private var mouseMoved = 0f
+    private val mouseHoldRunnable = Runnable { if (mouseButtonDown && !mouseDragging) startMouseDrag() }
+
+    /**
+     * Taste gedrückt: noch nichts an die Brille schicken. Kurzer Klick geht beim Loslassen als
+     * Ganzes raus, so kann ein Fokuswechsel ihn nicht zerreißen. Erst Halten oder Bewegen
+     * beginnt Ziehen bzw. langes Drücken.
+     */
+    private fun mousePress() {
+        if (mouseButtonDown) return
+        mouseButtonDown = true
+        mouseDragging = false
+        mouseMoved = 0f
+        mainHandler.postDelayed(mouseHoldRunnable, MOUSE_HOLD_MS)
+    }
+
+    private fun startMouseDrag() {
+        mainHandler.removeCallbacks(mouseHoldRunnable)
+        mouseDragging = true
+        DexController.pointerDown()
+    }
+
+    private fun mouseRelease() {
+        if (!mouseButtonDown) return
+        mouseButtonDown = false
+        mainHandler.removeCallbacks(mouseHoldRunnable)
+        if (mouseDragging) DexController.pointerUp() else DexController.click()
+        mouseDragging = false
     }
 
     /** Ohne Pointer Capture kommen Mausräder als generische Bewegung. */
@@ -341,6 +388,8 @@ class TrackpadView(context: Context) : View(context) {
         private const val HOLD_MS = 350L
         private const val TAP_MS = 250L
         private const val SCROLL_PX = 25f
+        private const val MOUSE_HOLD_MS = 250L
+        private const val DRAG_SLOP_PX = 8f
 
         private val HINTS = listOf(
             "Ein Finger: Zeiger bewegen, tippen klickt",

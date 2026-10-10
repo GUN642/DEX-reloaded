@@ -690,9 +690,30 @@ object DexController {
      * das Handy die Maus. Darum kurz danach den Fokus zurück aufs Handy holen.
      */
     private fun requestPhoneFocus() {
+        lastPointerDown = SystemClock.uptimeMillis()
+        retryPhoneFocus()
+    }
+
+    private fun retryPhoneFocus() {
         if (_screenConfig.value.keepPhoneFocus || !trackpadActive) return
         val svc = ShizukuManager.service.value ?: return
-        main.postDelayed({ runCatching { svc.focusDisplay(Display.DEFAULT_DISPLAY) } }, 60)
+        // Mehrfach versuchen, solange das Trackpad den Fokus nicht wieder hat
+        for (delay in longArrayOf(60, 200, 450, 900)) {
+            main.postDelayed({
+                if (trackpadActive && !trackpadFocused) runCatching { svc.focusDisplay(Display.DEFAULT_DISPLAY) }
+            }, delay)
+        }
+    }
+
+    /** Fokus des Trackpad-Fensters (vom TrackpadView gemeldet). */
+    @Volatile
+    var trackpadFocused = true
+
+    private var lastPointerDown = 0L
+
+    /** Trackpad hat den Fokus verloren: kurz nach einem Klick auf der Brille zurückholen. */
+    fun onTrackpadFocusLost() {
+        if (SystemClock.uptimeMillis() - lastPointerDown < 1500) retryPhoneFocus()
     }
 
     fun pointerUp() {
