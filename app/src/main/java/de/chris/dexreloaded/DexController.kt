@@ -13,6 +13,7 @@ import android.view.Display
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
+import de.chris.dexreloaded.desk.WideDesk
 import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.imu.HeadTracker
 import de.chris.dexreloaded.imu.VitureImu
@@ -134,6 +135,12 @@ object DexController {
         prefs.edit().putFloat("touchSpeed", v.touchSpeed).putFloat("mouseSpeed", v.mouseSpeed).apply()
     }
 
+    /** Breitbild mit Fenstern statt drei getrennter Bildschirme. */
+    private val _wideMode = MutableStateFlow(false)
+    val wideMode: StateFlow<Boolean> = _wideMode.asStateFlow()
+
+    private val wide get() = _wideMode.value
+
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
 
@@ -192,11 +199,14 @@ object DexController {
         }
         VitureImu.init(appContext)
         HeadTracker.init(appContext)
+        _wideMode.value = prefs.getBoolean("wideMode", false)
+        WideDesk.init(appContext, renderer, ::log)
         ShizukuManager.onServiceLost = {
             main.post {
-                if (_slots.value.isNotEmpty()) log("Shizuku-Dienst beendet. Virtuelle Displays sind weg.")
+                if (_slots.value.isNotEmpty() || WideDesk.active) log("Shizuku-Dienst beendet. Virtuelle Displays sind weg.")
                 _slots.value.keys.forEach { renderer.detachStream(it) }
                 _slots.value = emptyMap()
+                WideDesk.serviceLost()
             }
         }
         displaysChanged()
@@ -293,6 +303,7 @@ object DexController {
         _presentationShown.value = false
         // Ohne Presentation gibt es keine Surfaces mehr, also virtuelle Displays freigeben.
         releaseAllScreens()
+        if (WideDesk.active) WideDesk.stop()
         log("Arbeitsfläche geschlossen")
     }
 
@@ -421,6 +432,22 @@ object DexController {
             .apply()
     }
 
+    /** Zwischen drei Bildschirmen und Breitbild mit Fenstern umschalten. */
+    fun setWideMode(on: Boolean) {
+        if (on == wide) return
+        _wideMode.value = on
+        prefs.edit().putBoolean("wideMode", on).apply()
+        if (presentation == null) return
+        if (on) {
+            releaseAllScreens()
+            log("Breitbild an")
+        } else {
+            WideDesk.stop()
+            log("Breitbild aus")
+        }
+        main.postDelayed({ restoreScreens() }, 300)
+    }
+
     fun setGazeFollow(on: Boolean) {
         _gazeFollow.value = on
         prefs.edit().putBoolean("gazeFollow", on).apply()
@@ -450,6 +477,12 @@ object DexController {
      * darüber, der Startbildschirm bleibt die Grundlage. Auf anderen Bildschirmen ersetzt sie die App.
      */
     fun openApp(index: Int, app: AppEntry) {
+        if (wide) {
+            addRecent(app)
+            saveApps()
+            WideDesk.openWindow(app, index)
+            return
+        }
         val base = _screenApps.value[index]
         val slot = _slots.value[index]
         if (base != null && HomeStore.isHome(base.component) && slot != null) {
@@ -464,6 +497,11 @@ object DexController {
 
     /** Zum Startbildschirm: holt ihn nach vorn und dreht die Ansicht dorthin. */
     fun goHome() {
+        if (wide) {
+            WideDesk.focusBackground()
+            lookAt(1)
+            return
+        }
         val idx = _screenApps.value.entries.firstOrNull { HomeStore.isHome(it.value.component) }?.key
         if (idx == null) {
             log("Kein Startbildschirm eingerichtet. In „Bildschirme“ als App wählen.")
@@ -486,6 +524,10 @@ object DexController {
     fun restoreScreens() {
         if (presentation == null || ShizukuManager.service.value == null) return
         val c = _screenConfig.value
+        if (wide) {
+            WideDesk.start(c.width, c.height, c.dpi, c.keepPhoneFocus)
+            return
+        }
         for ((index, app) in _screenApps.value) {
             if (_slots.value[index] == null && index !in pending) {
                 launchOnScreen(index, app.component, c.width, c.height, c.dpi, false)
@@ -558,7 +600,7 @@ object DexController {
         renderer.pointerX = pointerX
         renderer.pointerY = pointerY
         val (w, h) = screenSize(pointerScreen)
-        navExpanded = dragScreen < 0 && _slots.value[pointerScreen] != null &&
+        navExpanded = !wide && dragScreen < 0 && _slots.value[pointerScreen] != null &&
             pointerY > h - NavBar.TRIGGER_H && abs(pointerX - w / 2f) < NavBar.TRIGGER_W
         renderer.navExpanded = navExpanded
     }
@@ -583,7 +625,7 @@ object DexController {
     }
 
     private fun onGazeScreen(i: Int) {
-        if (!_gazeFollow.value || dragScreen >= 0 || i == pointerScreen) return
+        if (!_gazeFollow.value || dragScreen >= 0 || WideDesk.dragging || i == pointerScreen) return
         resetPointer(i)
     }
 
@@ -618,12 +660,21 @@ object DexController {
                 _lookIndex.value = pointerScreen
                 renderer.lookAt(pointerScreen)
             }
+            if (wide) WideDesk.pointerMove(canvasX(), pointerY)
         }
         syncPointer()
     }
 
     /** Maustaste oder Finger gedrückt: Berührung beginnt. */
+    /** Zeiger als x-Koordinate der Breitbildfläche. */
+    private fun canvasX() = pointerScreen * screenSize(0).first + pointerX
+
     fun pointerDown() {
+        if (wide) {
+            WideDesk.pointerDown(canvasX(), pointerY)
+            requestPhoneFocus()
+            return
+        }
         if (handleNavClick()) return
         setFocus(pointerScreen)
         val slot = _slots.value[pointerScreen] ?: return
@@ -645,6 +696,10 @@ object DexController {
     }
 
     fun pointerUp() {
+        if (wide) {
+            WideDesk.pointerUp(canvasX(), pointerY)
+            return
+        }
         val i = dragScreen
         dragScreen = -1
         val slot = _slots.value[i] ?: return
@@ -658,6 +713,10 @@ object DexController {
 
     /** Mausrad: positive v scrollt nach oben. */
     fun scroll(h: Float, v: Float) {
+        if (wide) {
+            WideDesk.scroll(canvasX(), pointerY, h, v)
+            return
+        }
         val slot = _slots.value[pointerScreen] ?: return
         ShizukuManager.service.value?.injectScroll(slot.displayId, pointerX, pointerY, h, v)
     }
@@ -669,12 +728,17 @@ object DexController {
 
     /** Taste drücken und loslassen auf dem fokussierten Bildschirm. */
     fun sendKey(code: Int, meta: Int = 0) {
-        val slot = _slots.value[_focusedScreen.value] ?: return
+        val id = targetDisplayId() ?: return
         val svc = ShizukuManager.service.value ?: return
         val t = SystemClock.uptimeMillis()
-        svc.injectKey(slot.displayId, KeyEvent.ACTION_DOWN, code, meta, 0, t)
-        svc.injectKey(slot.displayId, KeyEvent.ACTION_UP, code, meta, 0, t)
+        svc.injectKey(id, KeyEvent.ACTION_DOWN, code, meta, 0, t)
+        svc.injectKey(id, KeyEvent.ACTION_UP, code, meta, 0, t)
     }
+
+    /** Display für Tastatureingaben: fokussierter Bildschirm oder im Breitbild das aktive Fenster. */
+    private fun targetDisplayId(): Int? =
+        if (wide) WideDesk.focusedDisplayId().takeIf { it >= 0 }
+        else _slots.value[_focusedScreen.value]?.displayId
 
     private val keyMap by lazy { KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD) }
 
@@ -684,7 +748,7 @@ object DexController {
      * geht über die Zwischenablage und Strg+V.
      */
     fun typeText(text: String) {
-        val slot = _slots.value[_focusedScreen.value] ?: return
+        val displayId = targetDisplayId() ?: return
         val svc = ShizukuManager.service.value ?: return
         val rest = StringBuilder()
         fun flushPaste() {
@@ -702,7 +766,7 @@ object DexController {
             }
             flushPaste()
             for (e in events) {
-                svc.injectKey(slot.displayId, e.action, e.keyCode, e.metaState, 0, SystemClock.uptimeMillis())
+                svc.injectKey(displayId, e.action, e.keyCode, e.metaState, 0, SystemClock.uptimeMillis())
             }
         }
         flushPaste()
@@ -732,9 +796,9 @@ object DexController {
     }
 
     private fun forwardKey(event: KeyEvent): Boolean {
-        val slot = _slots.value[_focusedScreen.value] ?: return false
+        val id = targetDisplayId() ?: return false
         val svc = ShizukuManager.service.value ?: return false
-        svc.injectKey(slot.displayId, event.action, event.keyCode, event.metaState, event.repeatCount, event.downTime)
+        svc.injectKey(id, event.action, event.keyCode, event.metaState, event.repeatCount, event.downTime)
         return true
     }
 

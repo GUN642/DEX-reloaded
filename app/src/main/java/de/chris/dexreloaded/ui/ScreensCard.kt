@@ -36,6 +36,7 @@ fun ScreensCard() {
     val shown by DexController.presentationShown.collectAsState()
     val service by ShizukuManager.service.collectAsState()
     val gazeFollow by DexController.gazeFollow.collectAsState()
+    val wide by DexController.wideMode.collectAsState()
     val context = LocalContext.current
     var picking by remember { mutableStateOf(-1) }
     var advanced by remember { mutableStateOf(false) }
@@ -57,7 +58,18 @@ fun ScreensCard() {
     Section("Bildschirme") {
         if (service == null) Text("Shizuku-Dienst fehlt. Apps starten erst, wenn er läuft.", style = MaterialTheme.typography.bodySmall)
         if (!shown) Text("Gewählte Apps starten, sobald die Arbeitsfläche angezeigt wird.", style = MaterialTheme.typography.bodySmall)
-        for (i in 0..2) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Breitbild mit Fenstern", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Die drei Bildschirme werden eine Fläche. Dahinter der Startbildschirm, jede App im eigenen Fenster. " +
+                        "Titelleiste ziehen verschiebt, Ecke unten rechts ändert die Größe.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(checked = wide, onCheckedChange = { DexController.setWideMode(it) })
+        }
+        if (!wide) for (i in 0..2) {
             val app = apps[i]
             val slot = slots[i]
             Row(verticalAlignment = Alignment.CenterVertically) {

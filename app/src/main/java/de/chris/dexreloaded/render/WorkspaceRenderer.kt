@@ -127,7 +127,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private val panelAspect = FloatArray(SCREEN_COUNT) { 9f / 16f }
     private val panels = arrayOfNulls<Panel>(SCREEN_COUNT)
     private val testTextures = IntArray(SCREEN_COUNT)
-    private val streams = arrayOfNulls<Stream>(SCREEN_COUNT)
+    /** Bildquellen: 0..2 Bildschirme, [BG_ID] Breitbild-Hintergrund, ab [WINDOW_ID_BASE] Fenster. */
+    private val streams = java.util.concurrent.ConcurrentHashMap<Int, Stream>()
 
     private var program2d = 0
     private var programOes = 0
@@ -149,7 +150,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     // ---- Aufrufe vom Hauptthread ----
 
     /**
-     * Legt für Bildschirm [index] eine Surface an, in die ein virtuelles Display rendern kann.
+     * Legt für Bildquelle [index] eine Surface an, in die ein virtuelles Display rendern kann.
+     * 0..2 sind die Bildschirme, [BG_ID] der Breitbild-Hintergrund, Fenster ab [WINDOW_ID_BASE].
      * [onReady] kommt auf dem Hauptthread.
      */
     fun attachStream(index: Int, width: Int, height: Int, onReady: (Surface) -> Unit) {
@@ -161,15 +163,53 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             val stream = Stream(tex, st, Surface(st))
             st.setOnFrameAvailableListener { stream.frameAvailable = true }
             streams[index] = stream
-            pixelW[index] = width.toFloat()
-            pixelH[index] = height.toFloat()
-            if (panelAspect[index] != height.toFloat() / width) {
-                panelAspect[index] = height.toFloat() / width
-                geometryDirty = true
+            if (index in 0 until SCREEN_COUNT) {
+                pixelW[index] = width.toFloat()
+                pixelH[index] = height.toFloat()
+                if (panelAspect[index] != height.toFloat() / width) {
+                    panelAspect[index] = height.toFloat() / width
+                    geometryDirty = true
+                }
             }
             mainHandler.post { onReady(stream.surface) }
         }
     }
+
+    /** Neue Puffergröße für eine Bildquelle (Fenstergröße geändert). */
+    fun resizeStream(index: Int, width: Int, height: Int) {
+        runOnGl { streams[index]?.surfaceTexture?.setDefaultBufferSize(width, height) }
+    }
+
+    /** Pixelgröße der Bildschirme im Breitbild (kein eigener Stream pro Bildschirm). */
+    fun setPanelPixels(width: Int, height: Int) {
+        runOnGl {
+            for (i in 0 until SCREEN_COUNT) {
+                pixelW[i] = width.toFloat()
+                pixelH[i] = height.toFloat()
+                if (panelAspect[i] != height.toFloat() / width) {
+                    panelAspect[i] = height.toFloat() / width
+                    geometryDirty = true
+                }
+            }
+        }
+    }
+
+    // ---- Breitbild mit Fenstern ----
+
+    /** Ein App-Fenster auf der Breitbildfläche, Koordinaten in Pixeln der Gesamtfläche. */
+    data class WindowGeom(val id: Int, val x: Float, val y: Float, val w: Float, val h: Float, val title: String)
+
+    /** Breitbild: Hintergrund [BG_ID] über alle drei Flächen, Fenster darüber. */
+    @Volatile
+    var wideMode = false
+
+    /** Fenster in Zeichenreihenfolge (das letzte liegt oben). */
+    @Volatile
+    var windows: List<WindowGeom> = emptyList()
+
+    private val titleTextures = HashMap<Int, Pair<String, Int>>()
+    private var closeTexture = 0
+    private var maxTexture = 0
 
     fun detachStream(index: Int) {
         runOnGl { releaseStreamGl(index) }
@@ -201,6 +241,15 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             navHandleTexture = GlUtil.textureFromBitmap(it)
             it.recycle()
         }
+        WindowChrome.closeBitmap().let {
+            closeTexture = GlUtil.textureFromBitmap(it)
+            it.recycle()
+        }
+        WindowChrome.maximizeBitmap().let {
+            maxTexture = GlUtil.textureFromBitmap(it)
+            it.recycle()
+        }
+        titleTextures.clear()
         val vbo = IntArray(1)
         GLES30.glGenBuffers(1, vbo, 0)
         dynamicVbo = vbo[0]
@@ -233,8 +282,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         }
         if (geometryDirty) rebuildGeometry()
 
-        for (s in streams) {
-            if (s != null && s.frameAvailable) {
+        for (s in streams.values) {
+            if (s.frameAvailable) {
                 s.frameAvailable = false
                 s.surfaceTexture.updateTexImage()
                 s.surfaceTexture.getTransformMatrix(s.texMatrix)
@@ -267,28 +316,128 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         updateGaze(yaw)
 
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+        val bg = if (wideMode) streams[BG_ID] else null
         for (i in 0 until SCREEN_COUNT) {
             val panel = panels[i] ?: continue
-            val stream = streams[i]
+            val stream = if (wideMode) bg else streams[i]
             if (stream != null && stream.hasFrame) {
-                GLES30.glUseProgram(programOes)
-                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-                GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stream.texture)
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(programOes, "uTex"), 0)
-                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programOes, "uTexMatrix"), 1, false, stream.texMatrix, 0)
-                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programOes, "uMvp"), 1, false, mvp, 0)
+                useOes(stream)
+                if (wideMode) uvRect(i / SCREEN_COUNT.toFloat(), 0f, 1f / SCREEN_COUNT, 1f)
             } else {
-                GLES30.glUseProgram(program2d)
-                GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-                GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, testTextures[i])
-                GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
-                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, mvp, 0)
+                use2d(testTextures[i])
             }
             drawPanel(panel)
         }
-        drawNavBar()
+        if (wideMode) drawWindows()
+        if (!wideMode) drawNavBar()
         drawPointer()
         GlUtil.checkError("onDrawFrame")
+    }
+
+    private var currentProgram = 0
+
+    private fun use2d(tex: Int) {
+        useProgram(program2d)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
+    }
+
+    private fun useOes(stream: Stream) {
+        useProgram(programOes)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stream.texture)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(programOes, "uTex"), 0)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programOes, "uTexMatrix"), 1, false, stream.texMatrix, 0)
+    }
+
+    private fun useColor(r: Float, g: Float, b: Float, a: Float) {
+        useProgram(programColor)
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(programColor, "uColor"), r, g, b, a)
+    }
+
+    private fun useProgram(prog: Int) {
+        GLES30.glUseProgram(prog)
+        currentProgram = prog
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(prog, "uMvp"), 1, false, mvp, 0)
+        uvRect(0f, 0f, 1f, 1f)
+    }
+
+    /** Ausschnitt der Textur: Versatz (u, v) und Größe (su, sv). */
+    private fun uvRect(u: Float, v: Float, su: Float, sv: Float) {
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(currentProgram, "uUvRect"), u, v, su, sv)
+    }
+
+    /**
+     * Rechteck in Pixeln der Breitbildfläche zeichnen. Es wird an den Bildschirmkanten
+     * geteilt, weil die drei Flächen schräg zueinander stehen. Textur-Ausschnitt passt sich an.
+     */
+    private fun drawCanvasRect(x0: Float, y0: Float, x1: Float, y1: Float, scale: Float, u0: Float = 0f, u1: Float = 1f) {
+        if (x1 <= x0) return
+        val pw = pixelW[0]
+        for (i in 0 until SCREEN_COUNT) {
+            if (panels[i] == null) continue
+            val left = i * pw
+            val sx0 = maxOf(x0, left)
+            val sx1 = minOf(x1, left + pw)
+            if (sx1 <= sx0) continue
+            val su0 = u0 + (u1 - u0) * (sx0 - x0) / (x1 - x0)
+            val su1 = u0 + (u1 - u0) * (sx1 - x0) / (x1 - x0)
+            fillQuad(i, sx0 - left, y0, sx1 - left, y1, scale)
+            uvRect(su0, 0f, su1 - su0, 1f)
+            drawPanel(Panel(dynamicVbo, 4))
+        }
+    }
+
+    /** App-Fenster mit Titelleiste, Schließen, Maximieren und Griff zum Vergrößern. */
+    private fun drawWindows() {
+        val list = windows
+        // Titeltexturen aufräumen und anlegen
+        val ids = list.map { it.id }.toSet()
+        titleTextures.keys.filter { it !in ids }.forEach { GlUtil.deleteTexture(titleTextures.remove(it)!!.second) }
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
+        GLES30.glEnable(GLES30.GL_BLEND)
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        val t = TITLE_PX
+        for (w in list) {
+            val title = titleTextures[w.id]?.takeIf { it.first == w.title }?.second ?: run {
+                titleTextures[w.id]?.let { GlUtil.deleteTexture(it.second) }
+                val bmp = WindowChrome.titleBitmap(w.title)
+                val tex = GlUtil.textureFromBitmap(bmp)
+                bmp.recycle()
+                titleTextures[w.id] = w.title to tex
+                tex
+            }
+            // Rahmen
+            useColor(0.25f, 0.27f, 0.3f, 1f)
+            drawCanvasRect(w.x - 1f, w.y - t - 1f, w.x + w.w + 1f, w.y + w.h + 1f, 0.999f)
+            // Titelleiste
+            useColor(0.12f, 0.14f, 0.16f, 1f)
+            drawCanvasRect(w.x, w.y - t, w.x + w.w, w.y, 0.999f)
+            use2d(title)
+            val titleW = minOf(t * WindowChrome.TITLE_ASPECT, w.w - 2 * t)
+            if (titleW > 0f) {
+                drawCanvasRect(w.x + 8f, w.y - t, w.x + 8f + titleW, w.y, 0.999f, 0f, titleW / (t * WindowChrome.TITLE_ASPECT))
+            }
+            use2d(maxTexture)
+            drawCanvasRect(w.x + w.w - 2 * t, w.y - t, w.x + w.w - t, w.y, 0.999f)
+            use2d(closeTexture)
+            drawCanvasRect(w.x + w.w - t, w.y - t, w.x + w.w, w.y, 0.999f)
+            // Inhalt
+            val stream = streams[w.id]
+            if (stream != null && stream.hasFrame) {
+                useOes(stream)
+            } else {
+                useColor(0.05f, 0.05f, 0.06f, 1f)
+            }
+            drawCanvasRect(w.x, w.y, w.x + w.w, w.y + w.h, 0.999f)
+            // Griff unten rechts
+            useColor(1f, 1f, 1f, 0.35f)
+            drawCanvasRect(w.x + w.w - RESIZE_PX / 2f, w.y + w.h - 4f, w.x + w.w, w.y + w.h, 0.998f)
+            drawCanvasRect(w.x + w.w - 4f, w.y + w.h - RESIZE_PX / 2f, w.x + w.w, w.y + w.h, 0.998f)
+        }
+        GLES30.glDisable(GLES30.GL_BLEND)
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
     }
 
     private fun drawPanel(panel: Panel) {
@@ -359,7 +508,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     /** Griff oder Leiste (Zurück, Home) unten in der Mitte des Bildschirms mit dem Zeiger. */
     private fun drawNavBar() {
         val i = pointerScreen
-        if (i !in 0 until SCREEN_COUNT || panels[i] == null || streams[i] == null) return
+        if (i !in 0 until SCREEN_COUNT || panels[i] == null || !streams.containsKey(i)) return
         val w = pixelW[i]
         val h = pixelH[i]
         val tex: Int
@@ -373,11 +522,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glDisable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-        GLES30.glUseProgram(program2d)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, mvp, 0)
+        use2d(tex)
         drawPanel(Panel(dynamicVbo, 4))
         GLES30.glDisable(GLES30.GL_BLEND)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
@@ -394,11 +539,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glDisable(GLES30.GL_DEPTH_TEST)
         GLES30.glEnable(GLES30.GL_BLEND)
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
-        GLES30.glUseProgram(program2d)
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, pointerTexture)
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, mvp, 0)
+        use2d(pointerTexture)
         drawPanel(Panel(dynamicVbo, 4))
         GLES30.glDisable(GLES30.GL_BLEND)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
@@ -454,8 +595,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     }
 
     private fun releaseStreamGl(index: Int) {
-        val s = streams[index] ?: return
-        streams[index] = null
+        val s = streams.remove(index) ?: return
         s.surfaceTexture.setOnFrameAvailableListener(null)
         s.surface.release()
         s.surfaceTexture.release()
@@ -465,9 +605,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     /** Beim Schließen der Presentation: alle Surfaces freigeben (auch ohne GL-Kontext). */
     fun releaseAll() {
         glTasks.clear()
-        for (i in streams.indices) {
-            val s = streams[i] ?: continue
-            streams[i] = null
+        for (i in streams.keys.toList()) {
+            val s = streams.remove(i) ?: continue
             runCatching {
                 s.surface.release()
                 s.surfaceTexture.release()
@@ -483,16 +622,27 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         private const val GAP_DEG = 0f
         private const val POINTER_PX = 40f
         private const val SNAP_FACTOR = 0.6f
+
+        /** Bildquelle des Breitbild-Hintergrunds. */
+        const val BG_ID = 10
+
+        /** Fenster bekommen Bildquellen ab hier. */
+        const val WINDOW_ID_BASE = 100
+
+        /** Höhe der Titelleiste und Größe des Griffs, Pixel der Fläche. */
+        const val TITLE_PX = 40f
+        const val RESIZE_PX = 36f
         private const val STRIDE = 5 * 4
 
         private const val VERTEX_SHADER = """#version 300 es
 uniform mat4 uMvp;
+uniform vec4 uUvRect;
 layout(location = 0) in vec3 aPos;
 layout(location = 1) in vec2 aUv;
 out vec2 vUv;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
-    vUv = aUv;
+    vUv = uUvRect.xy + aUv * uUvRect.zw;
 }
 """
 
