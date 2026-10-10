@@ -84,9 +84,15 @@ object HomeStore {
 
     fun wallpaperFile(): File = File(appContext.filesDir, "wallpaper.jpg")
 
-    /** Lädt das Hintergrundbild, verkleinert auf etwa Bildschirmgröße. null = Standardverlauf. */
-    suspend fun loadWallpaper(): Bitmap? = withContext(Dispatchers.IO) {
-        val f = wallpaperFile()
+    /** Breite Fassung (3 x Breite) für das Breitbild. */
+    fun wideWallpaperFile(): File = File(appContext.filesDir, "wallpaper_wide.jpg")
+
+    /**
+     * Lädt das Hintergrundbild. [wide]: Fassung für das Breitbild, sonst normal.
+     * Fehlt die breite Fassung, wird die normale genommen. null = Standardverlauf.
+     */
+    suspend fun loadWallpaper(wide: Boolean = false): Bitmap? = withContext(Dispatchers.IO) {
+        val f = if (wide && wideWallpaperFile().exists()) wideWallpaperFile() else wallpaperFile()
         if (!f.exists()) return@withContext null
         runCatching { BitmapFactory.decodeFile(f.absolutePath) }.getOrNull()
     }
@@ -96,8 +102,11 @@ object HomeStore {
         try {
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             appContext.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            // Genug Auflösung für die breite Fassung behalten
             var sample = 1
-            while (bounds.outWidth / (sample * 2) >= WALL_W && bounds.outHeight / (sample * 2) >= WALL_H) sample *= 2
+            while (bounds.outWidth / (sample * 2) >= WALL_W * 3 && bounds.outHeight / (sample * 2) >= WALL_H) sample *= 2
+            // Speicher begrenzen: höchstens etwa 24 Megapixel dekodieren
+            while (bounds.outWidth.toLong() / sample * (bounds.outHeight / sample) > 24_000_000L) sample *= 2
             val opts = BitmapFactory.Options().apply { inSampleSize = sample }
             val bmp = appContext.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
                 ?: return@withContext "Bild konnte nicht gelesen werden."
@@ -125,21 +134,28 @@ object HomeStore {
 
     fun resetWallpaper() {
         wallpaperFile().delete()
+        wideWallpaperFile().delete()
         bump()
     }
 
-    /** Auf 1920x1080 zuschneiden (wie „Füllen“) und speichern. */
+    /** Zuschneiden (wie „Füllen“) auf 1920x1080 und auf 5760x1080 fürs Breitbild, beides speichern. */
     private fun save(src: Bitmap) {
-        val out = Bitmap.createBitmap(WALL_W, WALL_H, Bitmap.Config.ARGB_8888)
-        val scale = max(WALL_W.toFloat() / src.width, WALL_H.toFloat() / src.height)
-        val w = (WALL_W / scale).toInt()
-        val h = (WALL_H / scale).toInt()
+        crop(src, WALL_W, WALL_H, wallpaperFile())
+        crop(src, WALL_W * 3, WALL_H, wideWallpaperFile())
+        bump()
+    }
+
+    private fun crop(src: Bitmap, outW: Int, outH: Int, file: File) {
+        val out = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        val scale = max(outW.toFloat() / src.width, outH.toFloat() / src.height)
+        val w = (outW / scale).toInt()
+        val h = (outH / scale).toInt()
         val x = (src.width - w) / 2
         val y = (src.height - h) / 2
-        Canvas(out).drawBitmap(src, Rect(x, y, x + w, y + h), Rect(0, 0, WALL_W, WALL_H), null)
-        wallpaperFile().outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+        Canvas(out).drawBitmap(src, Rect(x, y, x + w, y + h), Rect(0, 0, outW, outH), paint)
+        file.outputStream().use { out.compress(Bitmap.CompressFormat.JPEG, 92, it) }
         out.recycle()
-        bump()
     }
 
     private fun bump() {

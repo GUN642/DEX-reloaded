@@ -59,6 +59,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -129,7 +130,9 @@ private fun HomeScreen(screen: () -> Int) {
 @Composable
 private fun Wallpaper() {
     val version by HomeStore.wallpaperVersion.collectAsState()
-    val bmp by produceState<Bitmap?>(initialValue = null, version) { value = HomeStore.loadWallpaper() }
+    // Auf dem breiten Display (Breitbild) die breite Fassung nehmen
+    val wide = LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp * 3 }
+    val bmp by produceState<Bitmap?>(initialValue = null, version, wide) { value = HomeStore.loadWallpaper(wide) }
     val b = bmp
     if (b != null) {
         Image(
