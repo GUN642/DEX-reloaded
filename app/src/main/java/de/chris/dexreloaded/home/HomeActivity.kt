@@ -12,6 +12,18 @@ import android.net.NetworkCapabilities
 import android.os.BatteryManager
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import kotlin.math.roundToInt
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.border
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -132,15 +144,18 @@ private fun HomeScreen(screen: () -> Int) {
 @Composable
 private fun Wallpaper() {
     val version by HomeStore.wallpaperVersion.collectAsState()
-    // Auf dem breiten Display (Breitbild) die breite Fassung nehmen
-    val wide = LocalConfiguration.current.let { it.screenWidthDp > it.screenHeightDp * 3 }
-    val bmp by produceState<Bitmap?>(initialValue = null, version, wide) { value = HomeStore.loadWallpaper(wide) }
+    // Im Breitbild: mittleres Drittel des breiten Bilds, passend zu dem, was die Brille daneben zeichnet
+    val wide by DexController.wideMode.collectAsState()
+    val bmp by produceState<Bitmap?>(initialValue = null, version, wide) {
+        value = if (wide) HomeStore.loadWideCenter() else HomeStore.loadWallpaper()
+    }
     val b = bmp
     if (b != null) {
         Image(
             bitmap = b.asImageBitmap(),
             contentDescription = null,
             contentScale = ContentScale.Crop,
+            filterQuality = FilterQuality.High,
             modifier = Modifier.fillMaxSize(),
         )
     } else {
@@ -229,8 +244,12 @@ private fun networkName(context: Context): String {
 
 // ---- Mitte: Uhr ----
 
+/**
+ * Uhr mit Datum. Lange drücken: Bearbeiten. Dann ziehen verschiebt, der Griff unten rechts
+ * ändert die Größe, ein Klick daneben beendet das Bearbeiten. Lage wird gemerkt.
+ */
 @Composable
-private fun Center(screen: () -> Int) {
+private fun Center(@Suppress("UNUSED_PARAMETER") screen: () -> Int) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(Unit) {
         while (true) {
@@ -238,25 +257,98 @@ private fun Center(screen: () -> Int) {
             delay(5_000)
         }
     }
-    Column(
-        Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Spacer(Modifier.height(24.dp))
-        Text(
-            SimpleDateFormat("HH:mm", Locale.GERMANY).format(Date(now)),
-            color = Color.White,
-            fontSize = 96.sp,
-            fontWeight = FontWeight.Light,
-        )
-        Text(
-            SimpleDateFormat("EEEE, d. MMMM", Locale.GERMANY).format(Date(now)),
-            color = Color(0xDDFFFFFF),
-            fontSize = 22.sp,
-        )
-        Spacer(Modifier.weight(1f))
+    val saved by HomeStore.clock.collectAsState()
+    var editing by remember { mutableStateOf(false) }
+    var scale by remember(saved) { mutableFloatStateOf(saved.scale) }
+    var size by remember { mutableStateOf(IntSize.Zero) }
+    var pos by remember { mutableStateOf<Offset?>(null) }
+
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val areaW = constraints.maxWidth.toFloat()
+        val areaH = constraints.maxHeight.toFloat()
+        val defaultPos = Offset((areaW - size.width) / 2f, areaH * 0.06f)
+        val current = pos ?: if (saved.x >= 0f) Offset(saved.x * areaW, saved.y * areaH) else defaultPos
+
+        fun save() {
+            val p = pos ?: current
+            HomeStore.setClock(HomeStore.ClockLayout(p.x / areaW, p.y / areaH, scale))
+        }
+
+        if (editing) {
+            // Klick daneben beendet das Bearbeiten
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        detectTapGestures {
+                            save()
+                            editing = false
+                        }
+                    },
+            )
+        }
+        Box(
+            Modifier
+                .offset { IntOffset(current.x.roundToInt(), current.y.roundToInt()) }
+                .onSizeChanged { size = it }
+                .then(
+                    if (editing) {
+                        Modifier
+                            .border(2.dp, Color(0xAAFFFFFF), RoundedCornerShape(12.dp))
+                            .pointerInput(Unit) {
+                                detectDragGestures(onDragEnd = { save() }) { change, drag ->
+                                    change.consume()
+                                    val p = pos ?: current
+                                    pos = Offset(
+                                        (p.x + drag.x).coerceIn(-size.width / 2f, areaW - size.width / 2f),
+                                        (p.y + drag.y).coerceIn(0f, areaH - size.height / 2f),
+                                    )
+                                }
+                            }
+                    } else {
+                        Modifier.pointerInput(Unit) { detectTapGestures(onLongPress = { editing = true }) }
+                    },
+                )
+                .padding(12.dp),
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    SimpleDateFormat("HH:mm", Locale.GERMANY).format(Date(now)),
+                    color = Color.White,
+                    fontSize = (96 * scale).sp,
+                    fontWeight = FontWeight.Light,
+                )
+                Text(
+                    SimpleDateFormat("EEEE, d. MMMM", Locale.GERMANY).format(Date(now)),
+                    color = Color(0xDDFFFFFF),
+                    fontSize = (22 * scale).sp,
+                )
+            }
+        }
+        if (editing && size != IntSize.Zero) {
+            // Griff zum Vergrößern unten rechts
+            val handle = 36.dp
+            val hpx = with(LocalDensity.current) { handle.toPx() }
+            Box(
+                Modifier
+                    .offset {
+                        IntOffset(
+                            (current.x + size.width - hpx / 2f).roundToInt(),
+                            (current.y + size.height - hpx / 2f).roundToInt(),
+                        )
+                    }
+                    .size(handle)
+                    .clip(RoundedCornerShape(50))
+                    .background(Color(0xFF4FC3F7))
+                    .pointerInput(Unit) {
+                        detectDragGestures(onDragEnd = { save() }) { change, drag ->
+                            change.consume()
+                            val base = size.width / scale
+                            if (base > 0f) scale = ((size.width + drag.x) / base).coerceIn(0.4f, 3f)
+                        }
+                    },
+            )
+        }
     }
 }
 

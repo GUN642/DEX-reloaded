@@ -15,6 +15,7 @@ import de.chris.dexreloaded.render.WorkspaceRenderer.Companion.WINDOW_ID_BASE
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
 import java.util.concurrent.Executors
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
@@ -91,11 +92,14 @@ object WideDesk {
         renderer.setPanelPixels(width, height)
         renderer.wideMode = true
         publish()
+        loadWallpaper()
         if (bgDisplayId >= 0 || bgPending) return
         val service = ShizukuManager.service.value ?: return
         bgPending = true
-        val w = width * SCREEN_COUNT
-        log("Breitbild: Hintergrund ${w}x$height")
+        // Startbildschirm nur auf der mittleren Fläche (normale Breite). Sehr breite Displays
+        // rechnet Android herunter, dann wird alles unscharf. Das Bild daneben malt der Renderer.
+        val w = width
+        log("Breitbild: Startbildschirm ${w}x$height in der Mitte")
         renderer.attachStream(BG_ID, w, height) { surface ->
             worker.execute {
                 try {
@@ -113,6 +117,20 @@ object WideDesk {
         }
     }
 
+    private var wallpaperJob: kotlinx.coroutines.Job? = null
+
+    /** Breites Hintergrundbild laden und bei jeder Änderung neu an den Renderer geben. */
+    private fun loadWallpaper() {
+        if (wallpaperJob != null) return
+        wallpaperJob = scope.launch {
+            HomeStore.wallpaperVersion.collect {
+                renderer.setWideWallpaper(HomeStore.loadWideWallpaper())
+            }
+        }
+    }
+
+    private val scope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Main)
+
     /** Alles schließen (Wechsel zurück zu drei Bildschirmen oder Arbeitsfläche zu). */
     fun stop() {
         val service = ShizukuManager.service.value
@@ -125,6 +143,8 @@ object WideDesk {
         focusedWin = null
         drag = null
         active = false
+        wallpaperJob?.cancel()
+        wallpaperJob = null
         renderer.wideMode = false
         publish()
         worker.execute { ids.forEach { runCatching { service?.releaseVirtualDisplay(it) } } }
@@ -268,8 +288,8 @@ object WideDesk {
             }
         }
         focusedWin = null
-        if (bgDisplayId >= 0) {
-            val d = Drag.Touch(bgDisplayId, 0f, 0f, canvasW - 1, panelH - 1, now)
+        if (bgDisplayId >= 0 && cx >= panelW && cx < 2 * panelW) {
+            val d = Drag.Touch(bgDisplayId, panelW, 0f, panelW - 1, panelH - 1, now)
             drag = d
             touch(d, MotionEvent.ACTION_DOWN, cx, cy)
         }
@@ -307,8 +327,8 @@ object WideDesk {
         val win = wins.lastOrNull { cx >= it.x && cx <= it.x + it.w && cy >= it.y && cy <= it.y + it.h }
         if (win != null) {
             if (win.displayId >= 0) svc.injectScroll(win.displayId, cx - win.x, cy - win.y, h, v)
-        } else if (bgDisplayId >= 0) {
-            svc.injectScroll(bgDisplayId, cx, cy, h, v)
+        } else if (bgDisplayId >= 0 && cx >= panelW && cx < 2 * panelW) {
+            svc.injectScroll(bgDisplayId, cx - panelW, cy, h, v)
         }
     }
 
