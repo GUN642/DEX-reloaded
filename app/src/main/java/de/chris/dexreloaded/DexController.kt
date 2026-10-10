@@ -109,6 +109,17 @@ object DexController {
     private val _gazeFollow = MutableStateFlow(true)
     val gazeFollow: StateFlow<Boolean> = _gazeFollow.asStateFlow()
 
+    /** Zeigergeschwindigkeit für Trackpad und Maus. */
+    data class InputSettings(val touchSpeed: Float = 1.6f, val mouseSpeed: Float = 1.3f)
+
+    private val _inputSettings = MutableStateFlow(InputSettings())
+    val inputSettings: StateFlow<InputSettings> = _inputSettings.asStateFlow()
+
+    fun updateInputSettings(v: InputSettings) {
+        _inputSettings.value = v
+        prefs.edit().putFloat("touchSpeed", v.touchSpeed).putFloat("mouseSpeed", v.mouseSpeed).apply()
+    }
+
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
 
@@ -148,6 +159,10 @@ object DexController {
             forceStop = prefs.getBoolean("forceStop", false),
         )
         _gazeFollow.value = prefs.getBoolean("gazeFollow", true)
+        _inputSettings.value = InputSettings(
+            touchSpeed = prefs.getFloat("touchSpeed", 1.6f),
+            mouseSpeed = prefs.getFloat("mouseSpeed", 1.3f),
+        )
         loadApps()
         renderer.onGazeScreen = ::onGazeScreen
         resetPointer(1)

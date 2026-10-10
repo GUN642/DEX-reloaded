@@ -32,11 +32,11 @@ import kotlin.math.sqrt
 @SuppressLint("ViewConstructor")
 class TrackpadView(context: Context) : View(context) {
 
-    /** Faktor für Fingerbewegung (Pixel Handy zu Pixel Bildschirm). */
-    var touchSpeed = 2.2f
+    /** Faktor für Fingerbewegung (Pixel Handy zu Pixel Bildschirm), einstellbar. */
+    private val touchSpeed get() = DexController.inputSettings.value.touchSpeed
 
-    /** Faktor für die Maus. */
-    var mouseSpeed = 1.3f
+    /** Faktor für die Maus, einstellbar. */
+    private val mouseSpeed get() = DexController.inputSettings.value.mouseSpeed
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val density = resources.displayMetrics.density
