@@ -13,8 +13,10 @@ android {
         minSdk = 31
         targetSdk = 36
         // Bei jeder Änderung hochsetzen. Das Release-Tag kommt aus versionName.
-        versionCode = 2
-        versionName = "0.1.1"
+        versionCode = 3
+        versionName = "0.1.2"
+        // App-Name mit Version, z. B. "DEX reloaded 0.1.2"
+        resValue("string", "app_name", "DEX reloaded $versionName")
     }
 
     // Feste Signatur aus Repository-Secrets (siehe build-apk.yml).
@@ -42,6 +44,7 @@ android {
         compose = true
         aidl = true
         buildConfig = true
+        resValues = true
     }
 
     compileOptions {
