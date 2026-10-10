@@ -72,7 +72,9 @@ Nach jeder Phase liefert der Build eine installierbare APK, die Chris auf dem Ge
 1. Workflow `.github/workflows/build-apk.yml`, startet bei Push auf `main` sowie von Hand. Pushes auf andere Branches werden nur gebaut (Kontrolle und Artefakt, Debug-Signatur falls kein Keystore), ein Release entsteht nur von `main`. Grund: In der Claude-Code-Umgebung gibt es kein Android-SDK, der Bau wird über Actions geprüft. Änderungen nur an `.md`-Dateien lösen keinen Bau aus (`paths-ignore: "**.md"`). `concurrency` bricht ältere laufende Bauten ab.
 2. Ergebnis ist ein **GitHub Release** mit fertiger APK. Dateiname immer gleich: `DEX-reloaded.apk`, ohne Versionsnummer.
 3. **Bei jeder Änderung `versionCode` und `versionName` hochsetzen.** Das Release-Tag kommt aus der Version.
-4. Feste Signatur, damit Updates über die installierte Version gehen. Keystore einmalig erzeugen und als Repository-Secret hinterlegen. Chris dabei genau sagen, welche Secrets er anlegen muss.
+4. Claude darf selbst nach `main` mergen, wenn der Bau auf dem Branch grün ist. Danach den Release-Link direkt im Chat posten.
+5. Die App prüft beim Start GitHub Releases (`releases/latest`) auf eine neuere Version, lädt `DEX-reloaded.apk` und startet den System-Installer (`update/Updater.kt`). Darum muss das Release-Tag immer `v<versionName>` sein.
+6. Feste Signatur, damit Updates über die installierte Version gehen. Keystore einmalig erzeugen und als Repository-Secret hinterlegen. Chris dabei genau sagen, welche Secrets er anlegen muss.
 
 ## Zusammenarbeit
 

@@ -13,8 +13,8 @@ android {
         minSdk = 31
         targetSdk = 36
         // Bei jeder Änderung hochsetzen. Das Release-Tag kommt aus versionName.
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.1.1"
     }
 
     // Feste Signatur aus Repository-Secrets (siehe build-apk.yml).
@@ -65,6 +65,7 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.10.1")
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.2")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.9.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
     implementation("dev.rikka.shizuku:api:13.1.5")
