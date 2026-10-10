@@ -85,6 +85,8 @@ fun MainScreen(
             }
         }
         ScreensCard()
+        WorkspacesCard()
+        NotifyCard()
         HomeCard()
         InputCard()
         HeadTrackingCard()

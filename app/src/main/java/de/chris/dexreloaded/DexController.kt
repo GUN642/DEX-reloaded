@@ -18,6 +18,8 @@ import de.chris.dexreloaded.desk.WideDesk
 import de.chris.dexreloaded.home.HomeStore
 import de.chris.dexreloaded.imu.HeadTracker
 import de.chris.dexreloaded.imu.VitureImu
+import de.chris.dexreloaded.notify.Note
+import de.chris.dexreloaded.notify.Notifications
 import de.chris.dexreloaded.render.GlassPresentation
 import de.chris.dexreloaded.render.NavBar
 import de.chris.dexreloaded.render.OverlayBitmaps
@@ -25,6 +27,8 @@ import de.chris.dexreloaded.render.ScreenLayout
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
+import de.chris.dexreloaded.workspace.Workspace
+import de.chris.dexreloaded.workspace.Workspaces
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -214,6 +218,12 @@ object DexController {
             mouseSpeed = prefs.getFloat("mouseSpeed", 1.3f),
         )
         HomeStore.init(appContext)
+        Notifications.init(appContext)
+        Workspaces.init(appContext)
+        Notifications.onPopup = { note ->
+            val icon = runCatching { appContext.packageManager.getApplicationIcon(note.packageName).toBitmap(76, 76) }.getOrNull()
+            showToast(icon, note.appLabel, note.title, note.text) { openNotification(note) }
+        }
         loadApps()
         if (saveAppsLater) saveApps()
         renderer.onGazeScreen = ::onGazeScreen
@@ -430,7 +440,15 @@ object DexController {
      * Startet [component] (Paket/Activity) auf Bildschirm [index].
      * Legt bei Bedarf das virtuelle Display an.
      */
-    fun launchOnScreen(index: Int, component: String, width: Int, height: Int, dpi: Int, forceStop: Boolean) {
+    fun launchOnScreen(
+        index: Int,
+        component: String,
+        width: Int,
+        height: Int,
+        dpi: Int,
+        forceStop: Boolean,
+        then: ((Int) -> Unit)? = null,
+    ) {
         val service = ShizukuManager.service.value
         if (service == null) {
             log("Shizuku-Dienst nicht verbunden.")
@@ -442,7 +460,7 @@ object DexController {
         }
         val existing = _slots.value[index]
         if (existing != null && existing.width == width && existing.height == height && existing.dpi == dpi) {
-            startApp(existing, component, forceStop)
+            startApp(existing, component, forceStop, then)
             return
         }
         if (existing != null) releaseScreen(index)
@@ -458,7 +476,7 @@ object DexController {
                     val slot = ScreenSlot(index, id, width, height, dpi, null)
                     _slots.update { it + (index to slot) }
                     log("Virtuelles Display $id für Bildschirm ${index + 1} bereit")
-                    startApp(slot, component, forceStop)
+                    startApp(slot, component, forceStop, then)
                 } catch (e: Exception) {
                     log("Virtuelles Display fehlgeschlagen: $e")
                     renderer.detachStream(index)
@@ -469,7 +487,7 @@ object DexController {
         }
     }
 
-    private fun startApp(slot: ScreenSlot, component: String, forceStop: Boolean) {
+    private fun startApp(slot: ScreenSlot, component: String, forceStop: Boolean, then: ((Int) -> Unit)? = null) {
         val service = ShizukuManager.service.value ?: return
         worker.execute {
             try {
@@ -479,6 +497,7 @@ object DexController {
                 val out = service.launchApp(component, slot.displayId, stop)
                 out.lines().filter { it.isNotBlank() }.forEach { log("  $it") }
                 _slots.update { it + (slot.index to slot.copy(component = component)) }
+                then?.invoke(slot.displayId)
             } catch (e: Exception) {
                 log("Start fehlgeschlagen: $e")
             }
@@ -535,8 +554,8 @@ object DexController {
         prefs.edit().putBoolean("gazeFollow", on).apply()
     }
 
-    /** App für Bildschirm [index] merken und starten. */
-    fun setScreenApp(index: Int, app: AppEntry) {
+    /** App für Bildschirm [index] merken und starten. [then] bekommt danach die Display-ID (Hintergrundthread). */
+    fun setScreenApp(index: Int, app: AppEntry, then: ((Int) -> Unit)? = null) {
         if (HomeStore.isHome(app.component)) {
             // Den Startbildschirm gibt es nur einmal
             val others = _screenApps.value.filter { (i, a) -> i != index && HomeStore.isHome(a.component) }.keys
@@ -546,7 +565,7 @@ object DexController {
         addRecent(app)
         saveApps()
         val c = _screenConfig.value
-        launchOnScreen(index, app.component, c.width, c.height, c.dpi, c.forceStop)
+        launchOnScreen(index, app.component, c.width, c.height, c.dpi, c.forceStop, then)
     }
 
     private fun addRecent(app: AppEntry) {
@@ -1255,6 +1274,120 @@ object DexController {
             else -> return false
         }
         return true
+    }
+
+    // ---- Arbeitsplätze ----
+
+    /** Aktuellen Stand unter [name] speichern (überschreibt einen gleichnamigen). */
+    fun saveWorkspace(name: String) {
+        val ws = Workspace(
+            name = name.trim(),
+            wide = wide,
+            extras = _extraScreens.value,
+            cinema = _cinema.value,
+            apps = _screenApps.value,
+            windows = WideDesk.windowStates(),
+        )
+        Workspaces.put(ws)
+        log("Arbeitsplatz „${ws.name}“ gespeichert")
+    }
+
+    /** Arbeitsplatz herstellen: Bildschirme, Apps, Breitbild, Kino und Fenster. */
+    fun applyWorkspace(ws: Workspace) {
+        log("Arbeitsplatz „${ws.name}“ wird geladen")
+        Workspaces.setCurrent(ws.name)
+        val e = prefs.edit()
+        ScreenLayout.EXTRAS.forEach { e.putBoolean("extraScreen$it", it in ws.extras) }
+        e.putBoolean("cinema", ws.cinema)
+        e.apply()
+        _extraScreens.value = ws.extras
+        _cinema.value = ws.cinema
+        _screenApps.value = ws.apps
+        saveApps()
+        ws.apps.values.forEach { addRecent(it) }
+        if (ws.wide != wide) {
+            // Umschalten startet alles neu, Fenster öffnen aus dem gemerkten Stand
+            WideDesk.rememberWindows(ws.windows)
+            setWideMode(ws.wide)
+            return
+        }
+        applyLayout()
+        WideDesk.applyWindows(ws.windows)
+        if (wide || presentation == null || ShizukuManager.service.value == null) return
+        val active = activeScreens()
+        for (i in 0 until ScreenLayout.MAX) {
+            val target = ws.apps[i]
+            val slot = _slots.value[i]
+            when {
+                i !in active || target == null -> if (slot != null) releaseScreen(i)
+                slot == null || slot.component != target.component -> {
+                    val c = _screenConfig.value
+                    launchOnScreen(i, target.component, c.width, c.height, c.dpi, false)
+                }
+            }
+        }
+    }
+
+    // ---- Benachrichtigungen ----
+
+    /**
+     * Benachrichtigung öffnen: in der Brille auf dem Bildschirm mit dem Zeiger, im Breitbild als Fenster.
+     * Erst über die Absicht der Benachrichtigung (öffnet z. B. den richtigen Chat), sonst die App.
+     */
+    fun openNotification(note: Note) {
+        hideToast()
+        if (note.autoCancel && note.clearable) Notifications.dismiss(note.key)
+        val launch = appContext.packageManager.getLaunchIntentForPackage(note.packageName)?.component
+        val app = launch?.let { AppEntry(note.appLabel, note.packageName, it.flattenToString()) }
+        val pi = note.contentIntent
+        if (presentation == null || ShizukuManager.service.value == null) {
+            // Ohne Arbeitsfläche ganz normal auf dem Handy
+            runCatching { pi?.send() }
+            return
+        }
+        if (wide) {
+            WideDesk.openWithIntent(app, note.packageName, pointerScreen.coerceIn(0, 2), pi, ::sendIntentTo)
+            return
+        }
+        val screen = pointerScreen
+        val slot = _slots.value[screen]
+        if (slot != null && pi != null && sendIntentTo(pi, slot.displayId)) {
+            setFocus(screen)
+            if (app != null) addRecent(app)
+            return
+        }
+        if (app == null) {
+            log("${note.appLabel} lässt sich nicht öffnen.")
+            return
+        }
+        if (slot == null && pi != null) {
+            // Bildschirm leer: App starten, danach die Absicht auf ihr Display
+            setScreenApp(screen, app) { id -> sendIntentTo(pi, id) }
+        } else {
+            openApp(screen, app)
+        }
+    }
+
+    /** Absicht einer Benachrichtigung auf einem Display der Brille ausführen. */
+    private fun sendIntentTo(pi: android.app.PendingIntent, displayId: Int): Boolean = try {
+        val opts = android.app.ActivityOptions.makeBasic().setLaunchDisplayId(displayId)
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            @Suppress("DEPRECATION")
+            opts.setPendingIntentBackgroundActivityStartMode(android.app.ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+        }
+        pi.send(appContext, 0, null, null, null, null, opts.toBundle())
+        true
+    } catch (e: Exception) {
+        log("Benachrichtigung öffnen fehlgeschlagen: $e")
+        false
+    }
+
+    /** Activity auf dem Handydisplay starten (z. B. Einstellungen), auch wenn der Aufruf aus der Brille kommt. */
+    fun openOnPhone(intent: android.content.Intent) {
+        runCatching {
+            val opts = android.app.ActivityOptions.makeBasic().setLaunchDisplayId(Display.DEFAULT_DISPLAY)
+            appContext.startActivity(intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK), opts.toBundle())
+        }.onFailure { log("Öffnen am Handy fehlgeschlagen: $it") }
     }
 
     fun shutdown() {

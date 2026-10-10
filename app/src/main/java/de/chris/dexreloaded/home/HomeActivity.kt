@@ -42,6 +42,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Switch
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -84,6 +88,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import de.chris.dexreloaded.DexController
 import de.chris.dexreloaded.imu.VitureImu
+import de.chris.dexreloaded.notify.Note
+import de.chris.dexreloaded.notify.Notifications
+import de.chris.dexreloaded.workspace.Workspaces
 import de.chris.dexreloaded.render.ScreenLayout
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
@@ -120,12 +127,15 @@ class HomeActivity : ComponentActivity() {
 @Composable
 private fun HomeScreen(screen: () -> Int) {
     var drawer by remember { mutableStateOf(false) }
-    BackHandler(enabled = drawer) { drawer = false }
+    var notes by remember { mutableStateOf(false) }
+    BackHandler(enabled = drawer || notes) {
+        if (notes) notes = false else drawer = false
+    }
 
     Box(Modifier.fillMaxSize()) {
         Wallpaper()
         Column(Modifier.fillMaxSize()) {
-            StatusBar()
+            StatusBar(notesOpen = notes, onToggleNotes = { notes = !notes })
             Box(
                 Modifier
                     .weight(1f)
@@ -139,6 +149,141 @@ private fun HomeScreen(screen: () -> Int) {
             }
             Dock(screen, drawerOpen = drawer, onToggleDrawer = { drawer = !drawer })
         }
+        if (notes) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopEnd) {
+                NotificationPanel(onClose = { notes = false })
+            }
+        }
+    }
+}
+
+// ---- Benachrichtigungen ----
+
+@Composable
+private fun NotificationPanel(onClose: () -> Unit) {
+    val context = LocalContext.current
+    val notes by Notifications.list.collectAsState()
+    val connected by Notifications.connected.collectAsState()
+    val dnd by Notifications.doNotDisturb.collectAsState()
+    Column(
+        Modifier
+            .padding(top = 40.dp, end = 16.dp)
+            .width(470.dp)
+            .heightIn(max = 600.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(Color(0xF0151A20))
+            .padding(14.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                "Benachrichtigungen",
+                color = Color.White,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp,
+                modifier = Modifier.weight(1f),
+            )
+            Text("Nicht stören", color = Color(0xCCFFFFFF), fontSize = 13.sp)
+            Spacer(Modifier.width(6.dp))
+            Switch(checked = dnd, onCheckedChange = { Notifications.setDoNotDisturb(it) })
+            TextButton(onClick = onClose) { Text("✕") }
+        }
+        when {
+            !connected -> {
+                Text(
+                    "Noch kein Zugriff. Am Handy in den Einstellungen unter Benachrichtigungszugriff DEX reloaded erlauben.",
+                    color = Color(0xDDFFFFFF),
+                    fontSize = 14.sp,
+                )
+                TextButton(onClick = { DexController.openOnPhone(Notifications.accessIntent(context)) }) {
+                    Text("Einstellung am Handy öffnen")
+                }
+            }
+            notes.isEmpty() -> Text("Keine Benachrichtigungen", color = Color(0xAAFFFFFF), fontSize = 14.sp)
+            else -> {
+                LazyColumn(Modifier.weight(1f, fill = false), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(notes, key = { it.key }) { NoteItem(it) }
+                }
+                if (notes.any { it.clearable }) {
+                    TextButton(onClick = { Notifications.dismissAll() }, modifier = Modifier.align(Alignment.End)) {
+                        Text("Alle löschen")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun NoteItem(note: Note) {
+    var replying by remember(note.key) { mutableStateOf(false) }
+    var text by remember(note.key) { mutableStateOf("") }
+    var sent by remember(note.key) { mutableStateOf(false) }
+    val time = remember(note.time) {
+        val sameDay = SimpleDateFormat("yyyyMMdd", Locale.GERMANY).let { it.format(Date(note.time)) == it.format(Date()) }
+        SimpleDateFormat(if (sameDay) "HH:mm" else "d. MMM", Locale.GERMANY).format(Date(note.time))
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0x1FFFFFFF))
+            .combinedClickable(onClick = { DexController.openNotification(note) })
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SmallAppIcon(note.packageName, 24)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "${note.appLabel} · $time",
+                color = Color(0xBBFFFFFF),
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+            if (note.reply != null) TextButton(onClick = { replying = !replying }) { Text("Antworten") }
+            if (note.clearable) TextButton(onClick = { Notifications.dismiss(note.key) }) { Text("✕") }
+        }
+        Text(note.title, color = Color.White, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (note.text.isNotBlank()) {
+            Text(note.text, color = Color(0xDDFFFFFF), fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+        }
+        if (sent) Text("Gesendet", color = Color(0xFF81C784), fontSize = 12.sp)
+        if (replying) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    placeholder = { Text("Antwort") },
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    enabled = text.isNotBlank(),
+                    onClick = {
+                        if (Notifications.reply(note, text)) {
+                            text = ""
+                            replying = false
+                            sent = true
+                        }
+                    },
+                ) { Text("Senden") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SmallAppIcon(packageName: String, sizeDp: Int) {
+    val context = LocalContext.current
+    val px = with(LocalDensity.current) { sizeDp.dp.roundToPx() }.coerceAtLeast(8)
+    val icon by produceState<ImageBitmap?>(initialValue = null, packageName, px) {
+        value = withContext(Dispatchers.IO) {
+            runCatching { context.packageManager.getApplicationIcon(packageName).toBitmap(px, px).asImageBitmap() }.getOrNull()
+        }
+    }
+    Box(Modifier.size(sizeDp.dp)) {
+        icon?.let { Image(it, contentDescription = null, modifier = Modifier.size(sizeDp.dp), filterQuality = FilterQuality.High) }
     }
 }
 
@@ -175,7 +320,7 @@ private fun Wallpaper() {
 // ---- Statusleiste ----
 
 @Composable
-private fun StatusBar() {
+private fun StatusBar(notesOpen: Boolean, onToggleNotes: () -> Unit) {
     val context = LocalContext.current
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var battery by remember { mutableIntStateOf(-1) }
@@ -216,7 +361,7 @@ private fun StatusBar() {
             .padding(horizontal = 16.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("DEX reloaded", color = Color.White, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+        Box(Modifier.weight(1f)) { WorkspaceMenu() }
         Text("$date  $time", color = Color.White, fontWeight = FontWeight.SemiBold)
         Row(
             Modifier.weight(1f),
@@ -228,6 +373,51 @@ private fun StatusBar() {
             }
             if (network.isNotEmpty()) Text(network, color = Color.White)
             if (battery >= 0) Text("Akku $battery %" + if (charging) " ⚡" else "", color = Color.White)
+            val notes by Notifications.list.collectAsState()
+            val dnd by Notifications.doNotDisturb.collectAsState()
+            Text(
+                (if (dnd) "🔕" else "🔔") + if (notes.isNotEmpty()) " ${notes.size}" else "",
+                color = if (notesOpen) Color(0xFF4FC3F7) else Color.White,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(8.dp))
+                    .combinedClickable(onClick = onToggleNotes)
+                    .padding(horizontal = 6.dp),
+            )
+        }
+    }
+}
+
+/** Links in der Statusleiste: aktueller Arbeitsplatz, Klick öffnet die Auswahl. */
+@Composable
+private fun WorkspaceMenu() {
+    val list by Workspaces.list.collectAsState()
+    val current by Workspaces.current.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Text(
+            "DEX reloaded" + (if (current.isNotEmpty()) " · $current" else "") + if (list.isNotEmpty()) " ▾" else "",
+            color = Color.White,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .combinedClickable(onClick = { if (list.isNotEmpty()) open = true })
+                .padding(horizontal = 6.dp),
+        )
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            Text(
+                "Arbeitsplatz laden",
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            )
+            for (ws in list) {
+                DropdownMenuItem(
+                    text = { Text(ws.name + if (ws.name == current) "  ●" else "") },
+                    onClick = {
+                        open = false
+                        DexController.applyWorkspace(ws)
+                    },
+                )
+            }
         }
     }
 }
