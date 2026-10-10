@@ -217,6 +217,18 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     var windows: List<WindowGeom> = emptyList()
 
     private val titleTextures = HashMap<Int, Pair<String, Int>>()
+    private var wallTexture = 0
+    private var wallBitmap: android.graphics.Bitmap? = null
+
+    /** Breites Hintergrundbild fürs Breitbild (wird auf dem GL-Thread hochgeladen). */
+    fun setWideWallpaper(bitmap: android.graphics.Bitmap) {
+        runOnGl {
+            GlUtil.deleteTexture(wallTexture)
+            wallTexture = GlUtil.textureFromBitmap(bitmap)
+            wallBitmap?.recycle()
+            wallBitmap = bitmap
+        }
+    }
     private var closeTexture = 0
     private var maxTexture = 0
 
@@ -259,6 +271,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             it.recycle()
         }
         titleTextures.clear()
+        wallTexture = wallBitmap?.takeIf { !it.isRecycled }?.let { GlUtil.textureFromBitmap(it) } ?: 0
         val vbo = IntArray(1)
         GLES30.glGenBuffers(1, vbo, 0)
         dynamicVbo = vbo[0]
@@ -326,9 +339,15 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
         if (wideMode) {
-            val bg = streams[BG_ID]
-            if (bg != null && bg.hasFrame) useOes(bg) else useColor(0.05f, 0.07f, 0.1f, 1f)
+            // Hintergrundbild über die ganze gebogene Fläche, in voller Auflösung
+            if (wallTexture != 0) use2d(wallTexture) else useColor(0.05f, 0.07f, 0.1f, 1f)
             drawStrip(0f, 0f, canvasW(), pixelH[0], 1f)
+            // Startbildschirm (normales 1920er Display) in der Mitte darüber
+            val bg = streams[BG_ID]
+            if (bg != null && bg.hasFrame) {
+                useOes(bg)
+                drawStrip(pixelW[0], 0f, 2 * pixelW[0], pixelH[0], 0.9995f)
+            }
             drawWindows()
         } else {
             for (i in 0 until SCREEN_COUNT) {

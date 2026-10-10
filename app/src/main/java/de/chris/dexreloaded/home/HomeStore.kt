@@ -36,6 +36,21 @@ object HomeStore {
     private val _dock = MutableStateFlow<List<AppEntry>>(emptyList())
     val dock: StateFlow<List<AppEntry>> = _dock.asStateFlow()
 
+    /** Lage der Uhr: x, y als Anteil der Fläche (negativ = Standard), Größe als Faktor. */
+    data class ClockLayout(val x: Float = -1f, val y: Float = -1f, val scale: Float = 1f)
+
+    private val _clock = MutableStateFlow(ClockLayout())
+    val clock: StateFlow<ClockLayout> = _clock.asStateFlow()
+
+    fun setClock(layout: ClockLayout) {
+        _clock.value = layout
+        prefs.edit {
+            putFloat("clockX", layout.x)
+            putFloat("clockY", layout.y)
+            putFloat("clockScale", layout.scale)
+        }
+    }
+
     /** Zählt hoch, wenn sich das Hintergrundbild ändert. */
     private val _wallpaperVersion = MutableStateFlow(0)
     val wallpaperVersion: StateFlow<Int> = _wallpaperVersion.asStateFlow()
@@ -48,6 +63,11 @@ object HomeStore {
         _dock.value = prefs.getString("dockApps", null)
             ?.split('\n')?.mapNotNull { decode(it) } ?: emptyList()
         _wallpaperVersion.value = prefs.getInt("wallpaperVersion", 0)
+        _clock.value = ClockLayout(
+            prefs.getFloat("clockX", -1f),
+            prefs.getFloat("clockY", -1f),
+            prefs.getFloat("clockScale", 1f),
+        )
     }
 
     fun homeEntry(context: Context) =
@@ -95,6 +115,40 @@ object HomeStore {
         val f = if (wide && wideWallpaperFile().exists()) wideWallpaperFile() else wallpaperFile()
         if (!f.exists()) return@withContext null
         runCatching { BitmapFactory.decodeFile(f.absolutePath) }.getOrNull()
+    }
+
+    /**
+     * Breites Hintergrundbild (5760x1080) fürs Breitbild. Fehlt es, wird es aus dem normalen
+     * Bild erzeugt oder als Standardverlauf gemalt. Der Renderer zeichnet es über die ganze
+     * gebogene Fläche, der Startbildschirm in der Mitte zeigt genau das mittlere Drittel.
+     */
+    suspend fun loadWideWallpaper(): Bitmap = withContext(Dispatchers.IO) {
+        val wide = wideWallpaperFile()
+        if (!wide.exists()) {
+            val normal = wallpaperFile()
+            val src = if (normal.exists()) runCatching { BitmapFactory.decodeFile(normal.absolutePath) }.getOrNull() else null
+            if (src != null) crop(src, WALL_W * 3, WALL_H, wide)
+        }
+        runCatching { BitmapFactory.decodeFile(wide.absolutePath) }.getOrNull() ?: defaultWide()
+    }
+
+    /** Mittleres Drittel des breiten Hintergrundbilds, pixelgenau passend zum Renderer. */
+    suspend fun loadWideCenter(): Bitmap = withContext(Dispatchers.IO) {
+        val wide = loadWideWallpaper()
+        val third = wide.width / 3
+        Bitmap.createBitmap(wide, third, 0, third, wide.height)
+    }
+
+    /** Standardverlauf in voller Breite (gleiche Farben wie im Startbildschirm). */
+    private fun defaultWide(): Bitmap {
+        val w = WALL_W * 3
+        val bmp = Bitmap.createBitmap(w, WALL_H, Bitmap.Config.ARGB_8888)
+        val colors = intArrayOf(0xFF0D1B2A.toInt(), 0xFF1B263B.toInt(), 0xFF274060.toInt(), 0xFF0B3C49.toInt())
+        val paint = android.graphics.Paint().apply {
+            shader = android.graphics.LinearGradient(0f, 0f, w.toFloat(), WALL_H.toFloat(), colors, null, android.graphics.Shader.TileMode.CLAMP)
+        }
+        Canvas(bmp).drawRect(0f, 0f, w.toFloat(), WALL_H.toFloat(), paint)
+        return bmp
     }
 
     /** Bild aus der Galerie übernehmen. Gibt null bei Erfolg zurück, sonst einen Fehlertext. */
