@@ -4,6 +4,8 @@ import android.app.Activity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -35,6 +37,8 @@ fun TrackpadScreen(onClose: () -> Unit) {
     val focused by DexController.focusedScreen.collectAsState()
     val apps by DexController.screenApps.collectAsState()
     var dimmed by remember { mutableStateOf(false) }
+    var keyboard by remember { mutableStateOf(false) }
+    var pad by remember { mutableStateOf<TrackpadView?>(null) }
 
     DisposableEffect(Unit) {
         DexController.trackpadActive = true
@@ -59,10 +63,14 @@ fun TrackpadScreen(onClose: () -> Unit) {
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f),
             )
+            Button(onClick = { pad?.let { keyboard = it.toggleKeyboard() } }) {
+                Text(if (keyboard) "Tastatur aus" else "Tastatur")
+            }
+            Spacer(Modifier.width(8.dp))
             OutlinedButton(onClick = onClose) { Text("Fertig") }
         }
         AndroidView(
-            factory = { ctx -> TrackpadView(ctx).apply { keepScreenOn = true } },
+            factory = { ctx -> TrackpadView(ctx).apply { keepScreenOn = true }.also { pad = it } },
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),

@@ -85,6 +85,7 @@ fun MainScreen(
             }
         }
         ScreensCard()
+        InputCard()
         HeadTrackingCard()
         LogCard()
     }

@@ -239,7 +239,6 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         updateGaze(yaw)
 
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
-        drawFocusBorder()
         for (i in 0 until SCREEN_COUNT) {
             val panel = panels[i] ?: continue
             val stream = streams[i]
@@ -259,6 +258,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
             drawPanel(panel)
         }
+        drawFocusBorder()
         drawPointer()
         GlUtil.checkError("onDrawFrame")
     }
@@ -308,16 +308,28 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
-    /** Rahmen um den Bildschirm mit Tastaturfokus, etwas hinter der Fläche. */
+    /** Dünner roter Rahmen innen am Rand des Bildschirms mit Tastaturfokus, vor der Fläche. */
     private fun drawFocusBorder() {
         val i = focusedScreen
         if (i !in 0 until SCREEN_COUNT || panels[i] == null) return
-        val b = 10f
-        fillQuad(i, -b, -b, pixelW[i] + b, pixelH[i] + b, 1.002f)
+        val w = pixelW[i]
+        val h = pixelH[i]
+        val b = BORDER_PX * h / 1080f
+        GLES30.glDisable(GLES30.GL_DEPTH_TEST)
         GLES30.glUseProgram(programColor)
-        GLES30.glUniform4f(GLES30.glGetUniformLocation(programColor, "uColor"), 0.31f, 0.76f, 0.97f, 1f)
+        GLES30.glUniform4f(GLES30.glGetUniformLocation(programColor, "uColor"), 0.9f, 0.1f, 0.1f, 1f)
         GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programColor, "uMvp"), 1, false, mvp, 0)
-        drawPanel(Panel(dynamicVbo, 4))
+        val edges = arrayOf(
+            floatArrayOf(0f, 0f, w, b),
+            floatArrayOf(0f, h - b, w, h),
+            floatArrayOf(0f, 0f, b, h),
+            floatArrayOf(w - b, 0f, w, h),
+        )
+        for (e in edges) {
+            fillQuad(i, e[0], e[1], e[2], e[3], 0.998f)
+            drawPanel(Panel(dynamicVbo, 4))
+        }
+        GLES30.glEnable(GLES30.GL_DEPTH_TEST)
     }
 
     /** Mauszeiger als Pfeil, vor der Fläche, ohne Tiefentest. */
@@ -416,7 +428,9 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         private const val TAG = "DexRenderer"
         const val SCREEN_COUNT = 3
 
-        private const val GAP_DEG = 1.5f
+        // Bildschirme grenzen direkt aneinander
+        private const val GAP_DEG = 0f
+        private const val BORDER_PX = 2f
         private const val POINTER_PX = 40f
         private const val STRIDE = 5 * 4
 

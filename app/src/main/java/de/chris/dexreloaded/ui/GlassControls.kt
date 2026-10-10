@@ -198,3 +198,26 @@ private fun CalibrationDialog(onClose: () -> Unit) {
         },
     )
 }
+
+@Composable
+fun InputCard() {
+    val input by DexController.inputSettings.collectAsState()
+    Section("Zeigergeschwindigkeit") {
+        var touch by remember(input.touchSpeed) { mutableFloatStateOf(input.touchSpeed) }
+        Text("Trackpad: ${"%.1f".format(touch)}")
+        Slider(
+            value = touch,
+            onValueChange = { touch = (it * 10).roundToInt() / 10f },
+            onValueChangeFinished = { DexController.updateInputSettings(input.copy(touchSpeed = touch)) },
+            valueRange = 0.4f..4f,
+        )
+        var mouse by remember(input.mouseSpeed) { mutableFloatStateOf(input.mouseSpeed) }
+        Text("Maus: ${"%.1f".format(mouse)}")
+        Slider(
+            value = mouse,
+            onValueChange = { mouse = (it * 10).roundToInt() / 10f },
+            onValueChangeFinished = { DexController.updateInputSettings(input.copy(mouseSpeed = mouse)) },
+            valueRange = 0.3f..4f,
+        )
+    }
+}

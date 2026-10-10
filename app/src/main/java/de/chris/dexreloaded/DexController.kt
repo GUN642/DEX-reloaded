@@ -1,6 +1,8 @@
 package de.chris.dexreloaded
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.hardware.display.DisplayManager
 import android.os.Handler
@@ -8,6 +10,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
+import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import android.view.MotionEvent
 import de.chris.dexreloaded.imu.HeadTracker
@@ -109,6 +112,17 @@ object DexController {
     private val _gazeFollow = MutableStateFlow(true)
     val gazeFollow: StateFlow<Boolean> = _gazeFollow.asStateFlow()
 
+    /** Zeigergeschwindigkeit für Trackpad und Maus. */
+    data class InputSettings(val touchSpeed: Float = 1.6f, val mouseSpeed: Float = 1.3f)
+
+    private val _inputSettings = MutableStateFlow(InputSettings())
+    val inputSettings: StateFlow<InputSettings> = _inputSettings.asStateFlow()
+
+    fun updateInputSettings(v: InputSettings) {
+        _inputSettings.value = v
+        prefs.edit().putFloat("touchSpeed", v.touchSpeed).putFloat("mouseSpeed", v.mouseSpeed).apply()
+    }
+
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
 
@@ -148,6 +162,10 @@ object DexController {
             forceStop = prefs.getBoolean("forceStop", false),
         )
         _gazeFollow.value = prefs.getBoolean("gazeFollow", true)
+        _inputSettings.value = InputSettings(
+            touchSpeed = prefs.getFloat("touchSpeed", 1.6f),
+            mouseSpeed = prefs.getFloat("mouseSpeed", 1.3f),
+        )
         loadApps()
         renderer.onGazeScreen = ::onGazeScreen
         resetPointer(1)
@@ -546,12 +564,45 @@ object DexController {
         sendKey(KeyEvent.KEYCODE_BACK)
     }
 
-    private fun sendKey(code: Int) {
+    /** Taste drücken und loslassen auf dem fokussierten Bildschirm. */
+    fun sendKey(code: Int, meta: Int = 0) {
         val slot = _slots.value[_focusedScreen.value] ?: return
         val svc = ShizukuManager.service.value ?: return
         val t = SystemClock.uptimeMillis()
-        svc.injectKey(slot.displayId, KeyEvent.ACTION_DOWN, code, 0, 0, t)
-        svc.injectKey(slot.displayId, KeyEvent.ACTION_UP, code, 0, 0, t)
+        svc.injectKey(slot.displayId, KeyEvent.ACTION_DOWN, code, meta, 0, t)
+        svc.injectKey(slot.displayId, KeyEvent.ACTION_UP, code, meta, 0, t)
+    }
+
+    private val keyMap by lazy { KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD) }
+
+    /**
+     * Text von der Handy-Tastatur an den fokussierten Bildschirm. Zeichen, die sich als
+     * Tasten darstellen lassen, gehen als Tastendrücke. Der Rest (z. B. Umlaute, Emoji)
+     * geht über die Zwischenablage und Strg+V.
+     */
+    fun typeText(text: String) {
+        val slot = _slots.value[_focusedScreen.value] ?: return
+        val svc = ShizukuManager.service.value ?: return
+        val rest = StringBuilder()
+        fun flushPaste() {
+            if (rest.isEmpty()) return
+            val cm = appContext.getSystemService(ClipboardManager::class.java)
+            cm.setPrimaryClip(ClipData.newPlainText("DEX reloaded", rest.toString()))
+            rest.clear()
+            sendKey(KeyEvent.KEYCODE_V, KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON)
+        }
+        for (ch in text) {
+            val events = keyMap.getEvents(charArrayOf(ch))
+            if (events == null) {
+                rest.append(ch)
+                continue
+            }
+            flushPaste()
+            for (e in events) {
+                svc.injectKey(slot.displayId, e.action, e.keyCode, e.metaState, 0, SystemClock.uptimeMillis())
+            }
+        }
+        flushPaste()
     }
 
     /**
