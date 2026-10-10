@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.edit
 import de.chris.dexreloaded.BuildConfig
 import de.chris.dexreloaded.DexController
-import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.shizuku.ShizukuStatus
 import de.chris.dexreloaded.update.UpdateState
@@ -75,6 +74,7 @@ fun MainScreen(
         UpdateCard()
         ShizukuCard(onOpenShizuku)
         GlassCard(onShowPresentation)
+        HeadTrackingCard()
         LaunchCard()
         LogCard()
     }
@@ -126,48 +126,6 @@ private fun ShizukuCard(onOpenShizuku: () -> Unit) {
                     OutlinedButton(onClick = { ShizukuManager.restartService() }) { Text("Dienst neu starten") }
             }
             OutlinedButton(onClick = { ShizukuManager.refresh() }) { Text("Prüfen") }
-        }
-    }
-}
-
-@Composable
-private fun GlassCard(onShowPresentation: () -> Unit) {
-    val glass by DexController.glassDisplay.collectAsState()
-    val shown by DexController.presentationShown.collectAsState()
-    var mode by remember { mutableStateOf(DexController.viewMode) }
-    Section("Brille") {
-        val g = glass
-        if (g == null) {
-            Text("Keine Brille erkannt. Brille anstecken und in den Samsung-Einstellungen den HDMI-Modus auf Bildschirm spiegeln stellen. DeX nicht starten.")
-        } else {
-            val m = g.mode
-            Text("${g.name}, ${m.physicalWidth}x${m.physicalHeight}, Display ${g.displayId}")
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (shown) {
-                    OutlinedButton(onClick = { DexController.hidePresentation() }) { Text("Arbeitsfläche schließen") }
-                } else {
-                    Button(onClick = onShowPresentation) { Text("Arbeitsfläche anzeigen") }
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Ansicht:")
-                FilterChip(
-                    selected = mode == WorkspaceRenderer.ViewMode.ALLE,
-                    onClick = {
-                        mode = WorkspaceRenderer.ViewMode.ALLE
-                        DexController.setViewMode(mode)
-                    },
-                    label = { Text("Alle drei") },
-                )
-                FilterChip(
-                    selected = mode == WorkspaceRenderer.ViewMode.MITTE,
-                    onClick = {
-                        mode = WorkspaceRenderer.ViewMode.MITTE
-                        DexController.setViewMode(mode)
-                    },
-                    label = { Text("Mitte groß") },
-                )
-            }
         }
     }
 }
@@ -279,7 +237,7 @@ private fun LogCard() {
 }
 
 @Composable
-private fun Section(title: String, content: @Composable () -> Unit) {
+internal fun Section(title: String, content: @Composable () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)

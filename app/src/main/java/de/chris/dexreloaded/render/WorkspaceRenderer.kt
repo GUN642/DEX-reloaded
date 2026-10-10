@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Surface
+import de.chris.dexreloaded.imu.HeadTracker
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentLinkedQueue
@@ -17,15 +18,18 @@ import javax.microedition.khronos.opengles.GL10
 import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlin.math.tan
 
 /**
- * Zeichnet die Arbeitsfläche: drei leicht gekrümmte Bildschirme nebeneinander.
- * Kopffest, Kamera im Ursprung, Bildschirme auf einem Zylinder mit Radius [RADIUS].
+ * Zeichnet die Arbeitsfläche: drei flache Bildschirme, im Bogen um den Betrachter.
+ *
+ * Bei Größe 1 füllt ein Bildschirm genau das Sichtfeld der Brille, also 1920x1080
+ * Pixel für 1920x1080 Pixel, wenn man geradeaus schaut. Die Nachbarn stehen um
+ * eine Bildschirmbreite plus Lücke gedreht daneben. Die Kamera dreht sich mit dem
+ * Kopf (Gieren, Nicken) plus einem Versatz, den die Knöpfe auf dem Handy setzen.
  */
 class WorkspaceRenderer : GLSurfaceView.Renderer {
-
-    enum class ViewMode { ALLE, MITTE }
 
     /** Ein Bildschirm, der den Inhalt eines virtuellen Displays zeigt. */
     private class Stream(
@@ -43,13 +47,31 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     var glView: GLSurfaceView? = null
 
+    /** Diagonales Sichtfeld der Brille in Grad (Viture Pro 2: 50). */
     @Volatile
-    var viewMode = ViewMode.ALLE
+    var diagonalFov = 50f
         set(value) {
             field = value
-            projectionDirty = true
-            glView?.requestRender()
+            geometryDirty = true
         }
+
+    /** Größe eines Bildschirms relativ zum Sichtfeld (1 = füllt es genau). */
+    @Volatile
+    var size = 1f
+        set(value) {
+            field = value
+            geometryDirty = true
+        }
+
+    /** Kopf-Tracking anwenden. Aus = kopffest. */
+    @Volatile
+    var headTracking = true
+
+    /** Bildschirm (0..2), auf den die Ansicht ohne Kopfdrehung zeigt. */
+    @Volatile
+    var lookIndex = 1
+
+    private var yawOffset = 0f
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val glTasks = ConcurrentLinkedQueue<() -> Unit>()
@@ -62,10 +84,19 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private var program2d = 0
     private var programOes = 0
     private val projection = FloatArray(16)
+    private val view = FloatArray(16)
+    private val mvp = FloatArray(16)
+    private val tmp = FloatArray(16)
+    private val head = FloatArray(2)
     private var aspect = 16f / 9f
 
+    /** Horizontaler Winkel eines Bildschirms und Abstand der Mitten, in Grad. */
     @Volatile
-    private var projectionDirty = true
+    var panelStepDeg = 0f
+        private set
+
+    @Volatile
+    private var geometryDirty = true
 
     // ---- Aufrufe vom Hauptthread ----
 
@@ -80,14 +111,11 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             val st = SurfaceTexture(tex)
             st.setDefaultBufferSize(width, height)
             val stream = Stream(tex, st, Surface(st))
-            st.setOnFrameAvailableListener {
-                stream.frameAvailable = true
-                glView?.requestRender()
-            }
+            st.setOnFrameAvailableListener { stream.frameAvailable = true }
             streams[index] = stream
             if (panelAspect[index] != height.toFloat() / width) {
                 panelAspect[index] = height.toFloat() / width
-                rebuildPanel(index)
+                geometryDirty = true
             }
             mainHandler.post { onReady(stream.surface) }
         }
@@ -97,9 +125,13 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         runOnGl { releaseStreamGl(index) }
     }
 
+    /** Dreht die Ansicht auf Bildschirm [index] (0..2). */
+    fun lookAt(index: Int) {
+        lookIndex = index
+    }
+
     private fun runOnGl(task: () -> Unit) {
         glTasks.add(task)
-        glView?.requestRender()
     }
 
     // ---- GL-Thread ----
@@ -113,17 +145,16 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             val bmp = TestPattern.create(i)
             testTextures[i] = GlUtil.textureFromBitmap(bmp)
             bmp.recycle()
-            rebuildPanel(i)
         }
         GLES30.glClearColor(0f, 0f, 0f, 1f)
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
-        projectionDirty = true
+        geometryDirty = true
     }
 
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         GLES30.glViewport(0, 0, width, height)
         aspect = width.toFloat() / height.coerceAtLeast(1)
-        projectionDirty = true
+        geometryDirty = true
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -135,7 +166,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
                 Log.e(TAG, "GL-Aufgabe fehlgeschlagen", e)
             }
         }
-        if (projectionDirty) updateProjection()
+        if (geometryDirty) rebuildGeometry()
 
         for (s in streams) {
             if (s != null && s.frameAvailable) {
@@ -145,6 +176,22 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
                 s.hasFrame = true
             }
         }
+
+        // Blickrichtung: Kopf plus sanft angefahrener Versatz
+        val yawOffsetTarget = (lookIndex - (SCREEN_COUNT - 1) / 2f) * panelStepDeg
+        yawOffset += (yawOffsetTarget - yawOffset) * 0.2f
+        var yaw = yawOffset
+        var pitch = 0f
+        if (headTracking && HeadTracker.compute(head)) {
+            yaw += head[0]
+            pitch = head[1]
+        }
+        // Kamera nach rechts gedreht heißt Welt nach links: view = Rx(-pitch) * Ry(yaw)
+        Matrix.setRotateM(tmp, 0, -pitch, 1f, 0f, 0f)
+        Matrix.setRotateM(view, 0, yaw, 0f, 1f, 0f)
+        Matrix.multiplyMM(mvp, 0, tmp, 0, view, 0)
+        System.arraycopy(mvp, 0, view, 0, 16)
+        Matrix.multiplyMM(mvp, 0, projection, 0, view, 0)
 
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
         for (i in 0 until SCREEN_COUNT) {
@@ -156,13 +203,13 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
                 GLES30.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, stream.texture)
                 GLES30.glUniform1i(GLES30.glGetUniformLocation(programOes, "uTex"), 0)
                 GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programOes, "uTexMatrix"), 1, false, stream.texMatrix, 0)
-                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programOes, "uMvp"), 1, false, projection, 0)
+                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(programOes, "uMvp"), 1, false, mvp, 0)
             } else {
                 GLES30.glUseProgram(program2d)
                 GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
                 GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, testTextures[i])
                 GLES30.glUniform1i(GLES30.glGetUniformLocation(program2d, "uTex"), 0)
-                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, projection, 0)
+                GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program2d, "uMvp"), 1, false, mvp, 0)
             }
             drawPanel(panel)
         }
@@ -179,33 +226,41 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
-    private fun updateProjection() {
-        projectionDirty = false
-        val hfov = when (viewMode) {
-            ViewMode.ALLE -> (SCREEN_COUNT * PANEL_ANGLE + (SCREEN_COUNT - 1) * GAP_ANGLE) * 1.08f
-            ViewMode.MITTE -> PANEL_ANGLE * 1.08f
+    /** Projektion aus dem Sichtfeld der Brille und Flächen passend dazu. */
+    private fun rebuildGeometry() {
+        geometryDirty = false
+        val tanDiag = tan(Math.toRadians(diagonalFov / 2.0)).toFloat()
+        val tanV = tanDiag / sqrt(1f + aspect * aspect)
+        val tanH = tanV * aspect
+        val vfovDeg = Math.toDegrees(2.0 * atan(tanV.toDouble())).toFloat()
+        Matrix.perspectiveM(projection, 0, vfovDeg, aspect, 0.05f, 100f)
+
+        // Bildschirm im Abstand 1: halbe Breite so, dass Größe 1 das Sichtfeld genau füllt
+        val halfW = tanH * size
+        val halfAngle = atan(halfW)
+        val step = 2f * halfAngle + Math.toRadians(GAP_DEG.toDouble()).toFloat()
+        panelStepDeg = Math.toDegrees(step.toDouble()).toFloat()
+        for (i in 0 until SCREEN_COUNT) {
+            val center = (i - (SCREEN_COUNT - 1) / 2f) * step
+            buildPanel(i, center, halfW, halfW * panelAspect[i])
         }
-        val vfov = 2f * atan(tan(hfov / 2f) / aspect)
-        Matrix.perspectiveM(projection, 0, Math.toDegrees(vfov.toDouble()).toFloat(), aspect, 0.1f, 100f)
     }
 
-    /** Baut die gekrümmte Fläche für Bildschirm [index] als Dreiecksstreifen. */
-    private fun rebuildPanel(index: Int) {
+    /** Flache Fläche im Abstand 1, um [center] (Bogenmaß, positiv = rechts) gedreht. */
+    private fun buildPanel(index: Int, center: Float, halfW: Float, halfH: Float) {
         panels[index]?.let { GLES30.glDeleteBuffers(1, intArrayOf(it.vbo), 0) }
-        val center = (index - (SCREEN_COUNT - 1) / 2f) * (PANEL_ANGLE + GAP_ANGLE)
-        val halfH = PANEL_WIDTH * panelAspect[index] / 2f
-        val count = (COLUMNS + 1) * 2
-        val data = FloatArray(count * 5)
+        val c = cos(center)
+        val s = sin(center)
+        val data = FloatArray(4 * 5)
         var p = 0
-        for (c in 0..COLUMNS) {
-            val u = c.toFloat() / COLUMNS
-            val a = center - PANEL_ANGLE / 2f + PANEL_ANGLE * u
-            val x = RADIUS * sin(a)
-            val z = -RADIUS * cos(a)
-            // oben
-            data[p++] = x; data[p++] = halfH; data[p++] = z; data[p++] = u; data[p++] = 0f
-            // unten
-            data[p++] = x; data[p++] = -halfH; data[p++] = z; data[p++] = u; data[p++] = 1f
+        for (col in 0..1) {
+            val u = col.toFloat()
+            val x = (u * 2f - 1f) * halfW
+            // Punkt (x, y, -1) um die Hochachse drehen, sodass die Fläche nach rechts wandert
+            val rx = x * c + s
+            val rz = x * s - c
+            data[p++] = rx; data[p++] = halfH; data[p++] = rz; data[p++] = u; data[p++] = 0f
+            data[p++] = rx; data[p++] = -halfH; data[p++] = rz; data[p++] = u; data[p++] = 1f
         }
         val buf = ByteBuffer.allocateDirect(data.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         buf.put(data).position(0)
@@ -214,7 +269,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo[0])
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, buf, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
-        panels[index] = Panel(vbo[0], count)
+        panels[index] = Panel(vbo[0], 4)
     }
 
     private fun releaseStreamGl(index: Int) {
@@ -243,11 +298,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         private const val TAG = "DexRenderer"
         const val SCREEN_COUNT = 3
 
-        private const val RADIUS = 4f
-        private const val PANEL_WIDTH = 1.6f
-        private const val PANEL_ANGLE = PANEL_WIDTH / RADIUS
-        private const val GAP_ANGLE = 0.03f
-        private const val COLUMNS = 48
+        private const val GAP_DEG = 1.5f
         private const val STRIDE = 5 * 4
 
         private const val VERTEX_SHADER = """#version 300 es

@@ -7,6 +7,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Display
+import de.chris.dexreloaded.imu.HeadTracker
+import de.chris.dexreloaded.imu.VitureImu
 import de.chris.dexreloaded.render.GlassPresentation
 import de.chris.dexreloaded.render.WorkspaceRenderer
 import de.chris.dexreloaded.shizuku.ShizukuManager
@@ -60,7 +62,21 @@ object DexController {
     private var presentation: GlassPresentation? = null
     private val renderer = WorkspaceRenderer()
 
-    val viewMode: WorkspaceRenderer.ViewMode get() = renderer.viewMode
+    private lateinit var prefs: android.content.SharedPreferences
+
+    /** Einstellungen der Brillenansicht. */
+    data class ViewSettings(
+        val headTracking: Boolean = true,
+        val diagonalFov: Float = 50f,
+        val size: Float = 1f,
+    )
+
+    private val _viewSettings = MutableStateFlow(ViewSettings())
+    val viewSettings: StateFlow<ViewSettings> = _viewSettings.asStateFlow()
+
+    /** Bildschirm, auf den zuletzt per Knopf geschaut wurde (0..2). */
+    private val _lookIndex = MutableStateFlow(1)
+    val lookIndex: StateFlow<Int> = _lookIndex.asStateFlow()
 
     private val displayListener = object : DisplayManager.DisplayListener {
         override fun onDisplayAdded(displayId: Int) = displaysChanged()
@@ -74,6 +90,15 @@ object DexController {
         appContext = context.applicationContext
         displayManager = appContext.getSystemService(DisplayManager::class.java)
         displayManager.registerDisplayListener(displayListener, main)
+        prefs = appContext.getSharedPreferences("dex", Context.MODE_PRIVATE)
+        _viewSettings.value = ViewSettings(
+            headTracking = prefs.getBoolean("headTracking", true),
+            diagonalFov = prefs.getFloat("diagonalFov", 50f),
+            size = prefs.getFloat("size", 1f),
+        )
+        applyViewSettings()
+        VitureImu.init(appContext)
+        HeadTracker.init(appContext)
         ShizukuManager.onServiceLost = {
             main.post {
                 if (_slots.value.isNotEmpty()) log("Shizuku-Dienst beendet. Virtuelle Displays sind weg.")
@@ -152,6 +177,8 @@ object DexController {
             p.show()
             presentation = p
             _presentationShown.value = true
+            renderer.lookAt(_lookIndex.value)
+            if (_viewSettings.value.headTracking) VitureImu.start()
             log("Arbeitsfläche auf ${display.name} gestartet")
         } catch (e: Exception) {
             log("Presentation fehlgeschlagen: $e")
@@ -166,14 +193,43 @@ object DexController {
 
     private fun presentationClosed() {
         presentation = null
+        VitureImu.stop()
         _presentationShown.value = false
         // Ohne Presentation gibt es keine Surfaces mehr, also virtuelle Displays freigeben.
         releaseAllScreens()
         log("Arbeitsfläche geschlossen")
     }
 
-    fun setViewMode(mode: WorkspaceRenderer.ViewMode) {
-        renderer.viewMode = mode
+    fun updateViewSettings(change: (ViewSettings) -> ViewSettings) {
+        val v = change(_viewSettings.value)
+        _viewSettings.value = v
+        prefs.edit()
+            .putBoolean("headTracking", v.headTracking)
+            .putFloat("diagonalFov", v.diagonalFov)
+            .putFloat("size", v.size)
+            .apply()
+        applyViewSettings()
+    }
+
+    private fun applyViewSettings() {
+        val v = _viewSettings.value
+        renderer.headTracking = v.headTracking
+        renderer.diagonalFov = v.diagonalFov
+        renderer.size = v.size
+        if (presentation != null) {
+            if (v.headTracking) VitureImu.start() else VitureImu.stop()
+        }
+    }
+
+    /** Dreht die Ansicht auf Bildschirm [index] und zentriert den Kopf dorthin. */
+    fun lookAt(index: Int) {
+        _lookIndex.value = index
+        renderer.lookAt(index)
+        HeadTracker.recenter()
+    }
+
+    fun recenter() {
+        HeadTracker.recenter()
     }
 
     /**
