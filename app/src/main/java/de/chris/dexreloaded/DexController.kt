@@ -319,7 +319,7 @@ object DexController {
             presentation = p
             _presentationShown.value = true
             renderer.lookAt(_lookIndex.value)
-            if (_viewSettings.value.headTracking) VitureImu.start()
+            if (_viewSettings.value.headTracking || cinemaActive) VitureImu.start()
             log("Arbeitsfläche auf ${display.name} gestartet")
             resetPointer(_lookIndex.value)
             restoreScreens()
@@ -374,7 +374,7 @@ object DexController {
         renderer.snapMode = v.snapMode
         renderer.cinemaSize = v.cinemaSize
         if (presentation != null) {
-            if (v.headTracking) VitureImu.start() else VitureImu.stop()
+            if (v.headTracking || cinemaActive) VitureImu.start() else VitureImu.stop()
         }
     }
 
@@ -419,6 +419,8 @@ object DexController {
         _cinema.value = on
         prefs.edit().putBoolean("cinema", on).apply()
         applyLayout()
+        // Im Kinosaal läuft das Kopf-Tracking immer
+        applyViewSettings()
     }
 
     /** Aktive Bildschirme und Kino an den Renderer geben, Blick und Zeiger auf gültige Bildschirme. */
