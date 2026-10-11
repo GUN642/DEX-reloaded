@@ -27,10 +27,10 @@ object OverlayBitmaps {
     fun toast(icon: Bitmap?, app: String, title: String, text: String): Bitmap {
         val bmp = Bitmap.createBitmap(TOAST_W, TOAST_H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(238, 0x20, 0x24, 0x2A) }
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(242, 0, 0, 0) }
         c.drawRoundRect(RectF(0f, 0f, TOAST_W.toFloat(), TOAST_H.toFloat()), 28f, 28f, bg)
         val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(90, 255, 255, 255)
+            color = Color.argb(60, 255, 255, 255)
             style = Paint.Style.STROKE
             strokeWidth = 2f
         }
@@ -46,8 +46,10 @@ object OverlayBitmaps {
         val textRight = TOAST_W - TOAST_CLOSE_W - 8f
         val avail = textRight - left
         val small = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(190, 255, 255, 255)
-            textSize = 22f
+            color = Color.argb(170, 255, 255, 255)
+            textSize = 19f
+            typeface = GlassFonts.mono
+            letterSpacing = 0.08f
         }
         val bold = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
@@ -59,7 +61,9 @@ object OverlayBitmaps {
             textSize = 26f
         }
         fun fit(s: String, p: TextPaint) = TextUtils.ellipsize(s.replace('\n', ' '), p, avail, TextUtils.TruncateAt.END).toString()
-        c.drawText(fit(app, small), left, 36f, small)
+        // Roter Punkt vor dem App-Namen
+        c.drawCircle(left + 5f, 30f, 5f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xD7, 0x19, 0x21) })
+        c.drawText(TextUtils.ellipsize(app.uppercase(), small, avail - 20f, TextUtils.TruncateAt.END).toString(), left + 20f, 37f, small)
         c.drawText(fit(title, bold), left, 76f, bold)
         if (text.isNotBlank()) c.drawText(fit(text, body), left, 112f, body)
 
@@ -84,23 +88,35 @@ object OverlayBitmaps {
         val w = switcherWidth(list.size)
         val bmp = Bitmap.createBitmap(w, SWITCHER_H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(235, 0x18, 0x1B, 0x20) }
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(242, 0, 0, 0) }
         c.drawRoundRect(RectF(0f, 0f, w.toFloat(), SWITCHER_H.toFloat()), 32f, 32f, bg)
-        val hl = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(255, 0x2E, 0x6F, 0x9E) }
+        val frame = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(60, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+        }
+        c.drawRoundRect(RectF(1f, 1f, w - 1f, SWITCHER_H - 1f), 32f, 32f, frame)
+        val hl = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(34, 255, 255, 255) }
+        val red = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xD7, 0x19, 0x21) }
         val label = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = 22f
+            textSize = 18f
             textAlign = Paint.Align.CENTER
+            typeface = GlassFonts.mono
+            letterSpacing = 0.05f
         }
         val iconSize = 96
         list.forEachIndexed { i, (icon, name) ->
             val x0 = PAD + i * CELL_W
-            if (i == selected) c.drawRoundRect(RectF(x0 + 6f, PAD + 4f, x0 + CELL_W - 6f, PAD + CELL_H - 4f), 22f, 22f, hl)
+            if (i == selected) {
+                c.drawRoundRect(RectF(x0 + 6f, PAD + 4f, x0 + CELL_W - 6f, PAD + CELL_H - 4f), 22f, 22f, hl)
+                c.drawCircle(x0 + CELL_W / 2f, PAD + CELL_H - 10f, 5f, red)
+            }
             val ix = x0 + (CELL_W - iconSize) / 2f
             val iy = PAD + 22f
             if (icon != null) c.drawBitmap(icon, null, RectF(ix, iy, ix + iconSize, iy + iconSize), Paint(Paint.FILTER_BITMAP_FLAG))
-            val t = TextUtils.ellipsize(name, label, CELL_W - 20f, TextUtils.TruncateAt.END).toString()
-            c.drawText(t, x0 + CELL_W / 2f, PAD + CELL_H - 24f, label)
+            val t = TextUtils.ellipsize(name.uppercase(), label, CELL_W - 20f, TextUtils.TruncateAt.END).toString()
+            c.drawText(t, x0 + CELL_W / 2f, PAD + CELL_H - 30f, label)
         }
         return bmp
     }

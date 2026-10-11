@@ -28,15 +28,23 @@ object NavBar {
         val h = (HEIGHT * 2).toInt()
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(215, 20, 24, 28) }
+        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(225, 0, 0, 0) }
         c.drawRoundRect(RectF(0f, 0f, w.toFloat(), h.toFloat()), h / 2f, h / 2f, bg)
-        val line = Paint().apply { color = Color.argb(90, 255, 255, 255) }
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(60, 255, 255, 255)
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+        }
+        c.drawRoundRect(RectF(1f, 1f, w - 1f, h - 1f), h / 2f, h / 2f, border)
+        val line = Paint().apply { color = Color.argb(60, 255, 255, 255) }
         c.drawRect(w / 2f - 1f, h * 0.2f, w / 2f + 1f, h * 0.8f, line)
 
         val icon = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
         val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = h * 0.32f
+            textSize = h * 0.26f
+            typeface = GlassFonts.mono
+            letterSpacing = 0.08f
         }
         val cy = h / 2f
         // Zurück: Dreieck nach links
@@ -50,7 +58,7 @@ object NavBar {
             },
             icon,
         )
-        c.drawText("Zurück", bx + h * 0.42f, cy + text.textSize * 0.35f, text)
+        c.drawText("ZURÜCK", bx + h * 0.42f, cy + text.textSize * 0.35f, text)
         // Home: Haus
         val hx = w * 0.6f
         val s = h * 0.22f
@@ -67,7 +75,7 @@ object NavBar {
             },
             icon,
         )
-        c.drawText("Home", hx + h * 0.36f, cy + text.textSize * 0.35f, text)
+        c.drawText("HOME", hx + h * 0.36f, cy + text.textSize * 0.35f, text)
         return bmp
     }
 

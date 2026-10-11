@@ -95,7 +95,15 @@ import de.chris.dexreloaded.render.ScreenLayout
 import de.chris.dexreloaded.shizuku.ShizukuManager
 import de.chris.dexreloaded.ui.AppEntry
 import de.chris.dexreloaded.ui.Apps
+import de.chris.dexreloaded.ui.Dex
 import de.chris.dexreloaded.ui.DexTheme
+import de.chris.dexreloaded.ui.DotBar
+import de.chris.dexreloaded.ui.DotFont
+import de.chris.dexreloaded.ui.DotGrid
+import de.chris.dexreloaded.ui.Label
+import de.chris.dexreloaded.ui.MonoFont
+import de.chris.dexreloaded.ui.StatusDot
+import de.chris.dexreloaded.ui.dotHeading
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -170,20 +178,20 @@ private fun NotificationPanel(onClose: () -> Unit) {
             .padding(top = 40.dp, end = 16.dp)
             .width(470.dp)
             .heightIn(max = 600.dp)
-            .clip(RoundedCornerShape(20.dp))
-            .background(Color(0xF0151A20))
-            .padding(14.dp),
+            .clip(RoundedCornerShape(26.dp))
+            .background(Color(0xF2000000))
+            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(26.dp))
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                "Benachrichtigungen",
+                "MITTEILUNGEN",
                 color = Color.White,
-                fontWeight = FontWeight.SemiBold,
-                fontSize = 18.sp,
+                style = dotHeading(22),
                 modifier = Modifier.weight(1f),
             )
-            Text("Nicht stören", color = Color(0xCCFFFFFF), fontSize = 13.sp)
+            Label("Nicht stören")
             Spacer(Modifier.width(6.dp))
             Switch(checked = dnd, onCheckedChange = { Notifications.setDoNotDisturb(it) })
             TextButton(onClick = onClose) { Text("✕") }
@@ -226,8 +234,8 @@ private fun NoteItem(note: Note) {
     Column(
         Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(Color(0x1FFFFFFF))
+            .clip(RoundedCornerShape(16.dp))
+            .background(Color.White.copy(alpha = 0.07f))
             .combinedClickable(onClick = { DexController.openNotification(note) })
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
@@ -235,9 +243,9 @@ private fun NoteItem(note: Note) {
             SmallAppIcon(note.packageName, 24)
             Spacer(Modifier.width(8.dp))
             Text(
-                "${note.appLabel} · $time",
+                "${note.appLabel} · $time".uppercase(),
                 color = Color(0xBBFFFFFF),
-                fontSize = 12.sp,
+                style = MaterialTheme.typography.labelSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
@@ -249,7 +257,7 @@ private fun NoteItem(note: Note) {
         if (note.text.isNotBlank()) {
             Text(note.text, color = Color(0xDDFFFFFF), fontSize = 14.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
         }
-        if (sent) Text("Gesendet", color = Color(0xFF81C784), fontSize = 12.sp)
+        if (sent) Label("Gesendet", color = Dex.accent)
         if (replying) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 OutlinedTextField(
@@ -305,15 +313,14 @@ private fun Wallpaper() {
             modifier = Modifier.fillMaxSize(),
         )
     } else {
+        // Standard im Nothing-Stil: Schwarz mit Punktraster
         Box(
             Modifier
                 .fillMaxSize()
-                .background(
-                    Brush.linearGradient(
-                        listOf(Color(0xFF0D1B2A), Color(0xFF1B263B), Color(0xFF274060), Color(0xFF0B3C49)),
-                    ),
-                ),
-        )
+                .background(Color.Black),
+        ) {
+            DotGrid(Modifier.fillMaxSize(), spacing = 24.dp, radius = 1.4.dp, color = Color.White.copy(alpha = 0.09f))
+        }
     }
 }
 
@@ -353,36 +360,56 @@ private fun StatusBar(notesOpen: Boolean, onToggleNotes: () -> Unit) {
     }
 
     val time = SimpleDateFormat("HH:mm", Locale.GERMANY).format(Date(now))
-    val date = SimpleDateFormat("EEE, d. MMM", Locale.GERMANY).format(Date(now))
+    val date = SimpleDateFormat("EEE d. MMM", Locale.GERMANY).format(Date(now))
+    val mono = MaterialTheme.typography.labelMedium
     Row(
         Modifier
             .fillMaxWidth()
-            .background(Color(0x99000000))
-            .padding(horizontal = 16.dp, vertical = 6.dp),
+            .background(Color(0xB3000000))
+            .padding(horizontal = 18.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.weight(1f)) { WorkspaceMenu() }
-        Text("$date  $time", color = Color.White, fontWeight = FontWeight.SemiBold)
+        Text("${date.uppercase()}   $time", color = Color.White, style = mono)
         Row(
             Modifier.weight(1f),
-            horizontalArrangement = Arrangement.spacedBy(14.dp, Alignment.End),
+            horizontalArrangement = Arrangement.spacedBy(18.dp, Alignment.End),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             if (glass != null) {
-                val t = if (imu.status == VitureImu.Status.LAEUFT) "Brille ● Tracking" else "Brille"
-                Text(t, color = Color(0xFFB3E5FC))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusDot(if (imu.status == VitureImu.Status.LAEUFT) 2 else 1, size = 7.dp)
+                    Spacer(Modifier.width(6.dp))
+                    Text("BRILLE", color = Color.White, style = mono)
+                }
             }
-            if (network.isNotEmpty()) Text(network, color = Color.White)
-            if (battery >= 0) Text("Akku $battery %" + if (charging) " ⚡" else "", color = Color.White)
+            if (network.isNotEmpty()) Text(network.uppercase(), color = Color.White, style = mono)
+            if (battery >= 0) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    DotBar(battery / 100f, Modifier.width(46.dp).height(8.dp), on = if (battery <= 15) Dex.accent else Color.White)
+                    Spacer(Modifier.width(6.dp))
+                    Text("$battery%" + if (charging) "+" else "", color = Color.White, style = mono)
+                }
+            }
             val notes by Notifications.list.collectAsState()
             val dnd by Notifications.doNotDisturb.collectAsState()
-            Text(
-                (if (dnd) "🔕" else "🔔") + if (notes.isNotEmpty()) " ${notes.size}" else "",
-                color = if (notesOpen) Color(0xFF4FC3F7) else Color.White,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(8.dp))
+            Row(
+                Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(if (notesOpen) Color.White else Color.Transparent)
+                    .border(1.dp, Color.White.copy(alpha = 0.25f), RoundedCornerShape(50))
                     .combinedClickable(onClick = onToggleNotes)
-                    .padding(horizontal = 6.dp),
-            )
+                    .padding(horizontal = 10.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                StatusDot(if (notes.isNotEmpty() && !dnd) 2 else 0, size = 7.dp)
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    if (dnd) "STILL" else "${notes.size}",
+                    color = if (notesOpen) Color.Black else Color.White,
+                    style = mono,
+                )
+            }
         }
     }
 }
@@ -395,9 +422,9 @@ private fun WorkspaceMenu() {
     var open by remember { mutableStateOf(false) }
     Box {
         Text(
-            "DEX reloaded" + (if (current.isNotEmpty()) " · $current" else "") + if (list.isNotEmpty()) " ▾" else "",
+            ("DEX" + (if (current.isNotEmpty()) " · $current" else "") + if (list.isNotEmpty()) " ▾" else "").uppercase(),
             color = Color.White,
-            fontWeight = FontWeight.SemiBold,
+            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
             modifier = Modifier
                 .clip(RoundedCornerShape(8.dp))
                 .combinedClickable(onClick = { if (list.isNotEmpty()) open = true })
@@ -506,13 +533,16 @@ private fun Center(@Suppress("UNUSED_PARAMETER") screen: () -> Int) {
                 Text(
                     SimpleDateFormat("HH:mm", Locale.GERMANY).format(Date(now)),
                     color = Color.White,
-                    fontSize = (96 * scale).sp,
-                    fontWeight = FontWeight.Light,
+                    fontSize = (112 * scale).sp,
+                    fontFamily = DotFont,
+                    fontWeight = FontWeight.Bold,
                 )
                 Text(
-                    SimpleDateFormat("EEEE, d. MMMM", Locale.GERMANY).format(Date(now)),
-                    color = Color(0xDDFFFFFF),
-                    fontSize = (22 * scale).sp,
+                    SimpleDateFormat("EEEE d. MMMM", Locale.GERMANY).format(Date(now)).uppercase(),
+                    color = Color(0xCCFFFFFF),
+                    fontSize = (18 * scale).sp,
+                    fontFamily = MonoFont,
+                    letterSpacing = (2 * scale).sp,
                 )
             }
         }
@@ -530,7 +560,7 @@ private fun Center(@Suppress("UNUSED_PARAMETER") screen: () -> Int) {
                     }
                     .size(handle)
                     .clip(RoundedCornerShape(50))
-                    .background(Color(0xFF4FC3F7))
+                    .background(Dex.accent)
                     .pointerInput(Unit) {
                         detectDragGestures(onDragEnd = { save() }) { change, drag ->
                             change.consume()
@@ -556,8 +586,9 @@ private fun Dock(screen: () -> Int, drawerOpen: Boolean, onToggleDrawer: () -> U
     ) {
         Row(
             Modifier
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0x88000000))
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0xCC000000))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(28.dp))
                 .padding(horizontal = 14.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -582,19 +613,23 @@ private fun Dock(screen: () -> Int, drawerOpen: Boolean, onToggleDrawer: () -> U
                     Modifier
                         .width(1.dp)
                         .height(40.dp)
-                        .background(Color(0x55FFFFFF)),
+                        .background(Color.White.copy(alpha = 0.18f)),
                 )
                 for (app in others) AppIcon(app, screen, iconSize = 48, showLabel = false, running = true, taskbar = true)
             }
             Box(
                 Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(if (drawerOpen) Color(0xFF4FC3F7) else Color(0x33FFFFFF))
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (drawerOpen) Dex.accent else Color.White.copy(alpha = 0.10f))
                     .combinedClickable(onClick = onToggleDrawer),
                 contentAlignment = Alignment.Center,
             ) {
-                Text(if (drawerOpen) "✕" else "⋮⋮", color = Color.White, fontSize = 20.sp)
+                if (drawerOpen) {
+                    Text("✕", color = Color.White, fontSize = 20.sp)
+                } else {
+                    DotGrid(Modifier.size(24.dp), spacing = 8.dp, radius = 1.8.dp, color = Color.White)
+                }
             }
         }
     }
@@ -614,8 +649,9 @@ private fun AllApps(screen: () -> Int, onClose: () -> Unit) {
             Modifier
                 .widthIn(max = 1100.dp)
                 .fillMaxSize()
-                .clip(RoundedCornerShape(24.dp))
-                .background(Color(0xCC101418))
+                .clip(RoundedCornerShape(28.dp))
+                .background(Color(0xE6000000))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(28.dp))
                 .padding(20.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -711,7 +747,7 @@ private fun AppIcon(
                         .padding(top = 3.dp)
                         .size(6.dp)
                         .clip(RoundedCornerShape(50))
-                        .background(if (running) Color.White else Color.Transparent),
+                        .background(if (running) Dex.accent else Color.Transparent),
                 )
             }
             if (showLabel) {

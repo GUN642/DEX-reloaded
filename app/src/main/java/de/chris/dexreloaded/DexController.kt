@@ -218,6 +218,7 @@ object DexController {
             mouseSpeed = prefs.getFloat("mouseSpeed", 1.3f),
         )
         HomeStore.init(appContext)
+        de.chris.dexreloaded.render.GlassFonts.init(appContext)
         Notifications.init(appContext)
         Workspaces.init(appContext)
         Notifications.onPopup = { note ->

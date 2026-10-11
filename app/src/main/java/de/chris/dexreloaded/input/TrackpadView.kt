@@ -78,26 +78,52 @@ class TrackpadView(context: Context) : View(context) {
     }
 
     private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(90, 255, 255, 255)
+        color = Color.argb(110, 255, 255, 255)
         textAlign = Paint.Align.CENTER
-        textSize = 15f * density
+        textSize = 12f * density
+        letterSpacing = 0.06f
+        typeface = runCatching { androidx.core.content.res.ResourcesCompat.getFont(context, de.chris.dexreloaded.R.font.space_mono) }.getOrNull()
     }
-    private val holdPaint = Paint().apply { color = Color.argb(40, 79, 195, 247) }
+    private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+    /** Letzte Fingerposition, dort leuchten die Punkte (Nothing-Stil). */
+    private var touchX = -1f
+    private var touchY = -1f
+    private var touching = false
 
     init {
         isFocusable = true
         isFocusableInTouchMode = true
-        setBackgroundColor(Color.rgb(0x0B, 0x0E, 0x11))
+        setBackgroundColor(Color.BLACK)
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        if (holding) canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), holdPaint)
+        // Punktraster, um den Finger heller, beim Halten rot
+        val step = 22f * density
+        val r = 1.3f * density
+        val glow = 90f * density
+        var y = step / 2f
+        while (y < height) {
+            var x = step / 2f
+            while (x < width) {
+                val d = if (touching) kotlin.math.hypot(x - touchX, y - touchY) else Float.MAX_VALUE
+                val t = (1f - d / glow).coerceIn(0f, 1f)
+                dotPaint.color = when {
+                    t > 0f && holding -> Color.argb((60 + 195 * t).toInt(), 0xD7, 0x19, 0x21)
+                    t > 0f -> Color.argb((26 + 200 * t).toInt(), 255, 255, 255)
+                    else -> Color.argb(26, 255, 255, 255)
+                }
+                canvas.drawCircle(x, y, r * (1f + t), dotPaint)
+                x += step
+            }
+            y += step
+        }
         val cx = width / 2f
-        var y = height / 2f - 3 * hintPaint.textSize
+        var ty = height - (HINTS.size + 1) * hintPaint.textSize * 1.8f
         for (line in HINTS) {
-            canvas.drawText(line, cx, y, hintPaint)
-            y += hintPaint.textSize * 1.6f
+            canvas.drawText(line.uppercase(), cx, ty, hintPaint)
+            ty += hintPaint.textSize * 1.8f
         }
     }
 
@@ -116,6 +142,10 @@ class TrackpadView(context: Context) : View(context) {
             }
             return true
         }
+        touchX = avgX(e)
+        touchY = avgY(e)
+        touching = e.actionMasked != MotionEvent.ACTION_UP && e.actionMasked != MotionEvent.ACTION_CANCEL
+        invalidate()
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 lastX = e.x; lastY = e.y
