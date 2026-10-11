@@ -84,9 +84,17 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     @Volatile
     var cinemaScreen = -1
         set(value) {
+            if (value >= 0 && field < 0) showRequested = true
             field = value
             geometryDirty = true
         }
+
+    /** Kinosaal um die Leinwand. */
+    private val cinemaScene = CinemaScene()
+
+    /** Kino gerade eingeschaltet: Vorhang zu und neu öffnen. */
+    @Volatile
+    private var showRequested = false
 
     /** Größe im Kinomodus relativ zum Sichtfeld. */
     @Volatile
@@ -351,6 +359,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             it.recycle()
         }
         titleTextures.clear()
+        cinemaScene.onSurfaceCreated()
         wallTexture = wallBitmap?.takeIf { !it.isRecycled }?.let { GlUtil.textureFromBitmap(it) } ?: 0
         for (slot in 0 until OVERLAY_SLOTS) {
             overlayTex[slot] = overlays[slot]?.bitmap?.takeIf { !it.isRecycled }?.let { GlUtil.textureFromBitmap(it) } ?: 0
@@ -405,7 +414,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         pitchOffset += (pitchTarget - pitchOffset) * 0.2f
         var yaw = yawOffset
         var pitch = pitchOffset
-        if (headTracking && HeadTracker.compute(head)) {
+        // Im Kino folgt die Ansicht immer dem Kopf, die Leinwand bleibt fest im Raum
+        if ((headTracking || cinema) && HeadTracker.compute(head)) {
             if (snapMode && !cinema) {
                 snapView(yawTarget + head[0], pitchTarget + head[1])
                 yaw = snapYawCur
@@ -438,6 +448,18 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
                 drawStrip(pixelW[0], 0f, 2 * pixelW[0], pixelH[0], 0.9995f)
             }
             drawWindows()
+        } else if (cinema) {
+            val c = cinemaScreen.coerceIn(0, MAX_SCREENS - 1)
+            if (showRequested) {
+                showRequested = false
+                cinemaScene.startShow()
+            }
+            cinemaScene.draw(mvp, yaw, pitch, panelHalfW, panelHalfH[c]) {
+                val stream = streams[c]
+                if (stream != null && stream.hasFrame) useOes(stream) else use2d(testTextures[c])
+                fillQuad(c, 0f, 0f, pixelW[c], pixelH[c], CinemaScene.SCREEN_DIST)
+                drawPanel(Panel(dynamicVbo, 4))
+            }
         } else {
             for (i in visibleScreens()) {
                 val panel = panels[i] ?: continue
