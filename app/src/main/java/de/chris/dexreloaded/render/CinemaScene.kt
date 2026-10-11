@@ -652,7 +652,8 @@ class CinemaScene {
             val up = (if (both) abs(ny) else max(0f, ny)) * 0.06f
             // Etwas Streulicht in Körpernähe, damit Beine und Popcorn sichtbar sind
             val near = max(0f, 1f - sqrt(px * px + py * py + pz * pz) / 1.6f) * 0.35f
-            val f = 0.2f + screen + up + near
+            // Grundlicht nicht zu dunkel: Schwarz ist in der Brille durchsichtig
+            val f = 0.38f + screen + up + near
             return floatArrayOf(min(1f, base[0] * f * 1.6f), min(1f, base[1] * f * 1.6f), min(1f, base[2] * f * 1.6f), 1f)
         }
     }
