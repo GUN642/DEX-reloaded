@@ -2,6 +2,14 @@ package de.chris.dexreloaded.ui
 
 import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -65,25 +73,18 @@ fun MainScreen(
     Column(
         Modifier
             .fillMaxSize()
+            .background(Dex.background)
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 18.dp)
+            .padding(bottom = 32.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("DEX reloaded", style = MaterialTheme.typography.headlineMedium)
-                Text("Version ${BuildConfig.VERSION_NAME}", style = MaterialTheme.typography.bodySmall)
-            }
-            OutlinedButton(onClick = { showDebug = true }) { Text("Debug") }
-        }
+        Header(onDebug = { showDebug = true })
+        StatusStrip()
+        StartBlock(shown, onShowPresentation, onTrackpad = { showTrackpad = true })
         UpdateCard()
         ShizukuCard(onOpenShizuku)
         GlassCard(onShowPresentation)
-        if (shown) {
-            Button(onClick = { showTrackpad = true }, modifier = Modifier.fillMaxWidth()) {
-                Text("Trackpad öffnen (Maus und Tastatur an die Brille)")
-            }
-        }
         ScreensCard()
         WorkspacesCard()
         NotifyCard()
@@ -91,6 +92,88 @@ fun MainScreen(
         InputCard()
         HeadTrackingCard()
         LogCard()
+        Label("Schriften: Doto und Space Mono (SIL Open Font License)", Modifier.padding(start = 4.dp))
+    }
+}
+
+/** Kopf im Nothing-Stil: Punktraster, großes DEX in Punktmatrix. */
+@Composable
+private fun Header(onDebug: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(150.dp),
+    ) {
+        DotGrid(Modifier.matchParentSize())
+        Column(Modifier.align(Alignment.BottomStart).padding(bottom = 6.dp)) {
+            Text("DEX", style = dotHeading(68), color = Dex.text)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(2, size = 6.dp)
+                Spacer(Modifier.width(8.dp))
+                Label("Reloaded · v${BuildConfig.VERSION_NAME}", color = Dex.text)
+            }
+        }
+        Pill("Debug", false, onDebug, Modifier.align(Alignment.TopEnd).padding(top = 14.dp))
+    }
+}
+
+/** Drei Punkte für Shizuku, Brille und Tracking. */
+@Composable
+private fun StatusStrip() {
+    val shizuku by ShizukuManager.status.collectAsState()
+    val service by ShizukuManager.service.collectAsState()
+    val glass by DexController.glassDisplay.collectAsState()
+    val shown by DexController.presentationShown.collectAsState()
+    val imu by de.chris.dexreloaded.imu.VitureImu.state.collectAsState()
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(50))
+            .border(1.dp, Dex.divider, RoundedCornerShape(50))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        StatusItem("Shizuku", if (service != null) 2 else if (shizuku == ShizukuStatus.BEREIT || shizuku == ShizukuStatus.VERBINDE) 1 else 0)
+        StatusItem("Brille", if (shown) 2 else if (glass != null) 1 else 0)
+        StatusItem("Tracking", if (imu.status == de.chris.dexreloaded.imu.VitureImu.Status.LAEUFT) 2 else 0)
+    }
+}
+
+@Composable
+private fun StatusItem(name: String, state: Int) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        StatusDot(state)
+        Spacer(Modifier.width(8.dp))
+        Label(name, color = if (state > 0) Dex.text else Dex.textMuted)
+    }
+}
+
+/** Großer Startknopf bzw. Trackpad und Beenden, wenn die Arbeitsfläche läuft. */
+@Composable
+private fun StartBlock(shown: Boolean, onShow: () -> Unit, onTrackpad: () -> Unit) {
+    val glass by DexController.glassDisplay.collectAsState()
+    if (!shown) {
+        Button(
+            onClick = onShow,
+            enabled = glass != null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(58.dp),
+        ) { Text(if (glass != null) "ARBEITSFLÄCHE STARTEN" else "KEINE BRILLE ERKANNT", style = MaterialTheme.typography.labelLarge) }
+    } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Button(
+                onClick = onTrackpad,
+                modifier = Modifier
+                    .weight(1f)
+                    .height(58.dp),
+            ) { Text("TRACKPAD", style = MaterialTheme.typography.labelLarge) }
+            OutlinedButton(
+                onClick = { DexController.hidePresentation() },
+                modifier = Modifier.height(58.dp),
+            ) { Text("BEENDEN", style = MaterialTheme.typography.labelLarge) }
+        }
     }
 }
 
@@ -153,7 +236,8 @@ private fun LogCard() {
         } else {
             Text(
                 log.takeLast(30).joinToString("\n"),
-                fontFamily = FontFamily.Monospace,
+                fontFamily = MonoFont,
+                color = Dex.textMuted,
                 fontSize = 11.sp,
             )
         }
@@ -162,9 +246,17 @@ private fun LogCard() {
 
 @Composable
 internal fun Section(title: String, content: @Composable () -> Unit) {
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
+    Column(Modifier.fillMaxWidth()) {
+        Label(title, Modifier.padding(start = 4.dp, bottom = 8.dp))
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(24.dp))
+                .background(Dex.surface)
+                .border(1.dp, Dex.divider, RoundedCornerShape(24.dp))
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
             content()
         }
     }

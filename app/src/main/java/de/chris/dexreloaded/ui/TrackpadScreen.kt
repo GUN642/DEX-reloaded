@@ -2,6 +2,13 @@ package de.chris.dexreloaded.ui
 
 import android.app.Activity
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -54,72 +61,105 @@ fun TrackpadScreen(onClose: () -> Unit) {
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    val rec by DexController.recording.collectAsState()
+    val cinema by DexController.cinema.collectAsState()
+    val wide by DexController.wideMode.collectAsState()
+    Column(
+        Modifier
+            .fillMaxSize()
+            .background(Dex.background),
+    ) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 6.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            val app = apps[focused]?.label ?: "leer"
-            Text(
-                "Fokus: ${ScreenLayout.shortName(focused)} ($app)",
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
-            val rec by DexController.recording.collectAsState()
-            TextButton(onClick = { DexController.toggleRecording() }) {
-                Text(if (rec) "■ Stopp" else "● Rec", color = if (rec) Color(0xFFFF5252) else Color.Unspecified)
+            Column(Modifier.weight(1f)) {
+                Label("Fokus · ${ScreenLayout.shortName(focused)}")
+                Text(
+                    apps[focused]?.label ?: "leer",
+                    color = Dex.text,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-            TextButton(onClick = { DexController.takeScreenshot() }) { Text("Foto") }
-            Button(onClick = { pad?.let { keyboard = it.toggleKeyboard() } }) {
-                Text(if (keyboard) "Tast. aus" else "Tastatur")
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill(if (rec) "■ Rec" else "● Rec", rec, { DexController.toggleRecording() })
+                Pill("Foto", false, { DexController.takeScreenshot() })
+                Pill("Tast.", keyboard, { pad?.let { keyboard = it.toggleKeyboard() } })
+                Pill("Fertig", false, onClose)
             }
-            Spacer(Modifier.width(4.dp))
-            OutlinedButton(onClick = onClose) { Text("Fertig") }
         }
         AndroidView(
             factory = { ctx -> TrackpadView(ctx).apply { keepScreenOn = true }.also { pad = it } },
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp)
+                .clip(RoundedCornerShape(28.dp))
+                .border(1.dp, Dex.divider, RoundedCornerShape(28.dp)),
         )
-        val cinema by DexController.cinema.collectAsState()
-        val wide by DexController.wideMode.collectAsState()
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(start = 8.dp, end = 8.dp, top = 6.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        Column(
+            Modifier.padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Button(onClick = { DexController.back() }, modifier = Modifier.weight(1f)) { Text("Zurück") }
-            Button(onClick = { DexController.goHome() }, modifier = Modifier.weight(1f)) { Text("Home") }
-            OutlinedButton(onClick = { DexController.switchToPrevious() }, modifier = Modifier.weight(1f)) { Text("⇄ Apps") }
-            OutlinedButton(
-                onClick = { DexController.setCinema(!cinema) },
-                enabled = !wide,
-                modifier = Modifier.weight(1f),
-            ) { Text(if (cinema) "Kino aus" else "Kino") }
-        }
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .padding(8.dp),
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            OutlinedButton(onClick = { DexController.lookRelative(-1) }, modifier = Modifier.weight(0.7f)) { Text("◀") }
-            OutlinedButton(onClick = { DexController.recenter() }, modifier = Modifier.weight(1f)) { Text("Mitte") }
-            OutlinedButton(onClick = { DexController.lookRelative(1) }, modifier = Modifier.weight(0.7f)) { Text("▶") }
-            OutlinedButton(
-                onClick = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PadKey("Zurück", Modifier.weight(1f)) { DexController.back() }
+                PadKey("Home", Modifier.weight(1f), accent = true) { DexController.goHome() }
+                PadKey("⇄ Apps", Modifier.weight(1f)) { DexController.switchToPrevious() }
+                PadKey(if (cinema) "Kino aus" else "Kino", Modifier.weight(1f), enabled = !wide, selected = cinema) {
+                    DexController.setCinema(!cinema)
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                PadKey("◀", Modifier.weight(0.7f)) { DexController.lookRelative(-1) }
+                PadKey("Mitte", Modifier.weight(1f)) { DexController.recenter() }
+                PadKey("▶", Modifier.weight(0.7f)) { DexController.lookRelative(1) }
+                PadKey(if (dimmed) "Hell" else "Dunkel", Modifier.weight(1f), selected = dimmed) {
                     dimmed = !dimmed
                     setBrightness(activity, if (dimmed) 0.01f else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE)
-                },
-                modifier = Modifier.weight(1f),
-            ) { Text(if (dimmed) "Hell" else "Dunkel") }
+                }
+            }
         }
+    }
+}
+
+/** Taste unter dem Trackpad: dunkle Fläche, Monospace in Großbuchstaben. */
+@Composable
+private fun PadKey(
+    text: String,
+    modifier: Modifier = Modifier,
+    accent: Boolean = false,
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier
+            .height(50.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(
+                when {
+                    selected -> Dex.text
+                    accent -> Dex.accent
+                    else -> Dex.surfaceHigh
+                },
+            )
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text.uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = when {
+                !enabled -> Dex.textMuted.copy(alpha = 0.4f)
+                selected -> Dex.background
+                else -> Dex.text
+            },
+            maxLines = 1,
+        )
     }
 }
 

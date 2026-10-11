@@ -53,26 +53,18 @@ fun GlassCard(onShowPresentation: () -> Unit) {
         if (shown) {
             val rec by DexController.recording.collectAsState()
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { DexController.hidePresentation() }) { Text("Arbeitsfläche schließen") }
-                OutlinedButton(onClick = { DexController.toggleRecording() }) {
-                    Text(if (rec) "■ Aufnahme stoppen" else "● Aufnahme")
-                }
+                Pill(if (rec) "■ Aufnahme stoppen" else "● Aufnahme", rec, { DexController.toggleRecording() })
+                Pill("Foto", false, { DexController.takeScreenshot() })
             }
-        } else {
-            Button(onClick = onShowPresentation) { Text("Arbeitsfläche anzeigen") }
         }
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("Blick auf:")
+            Label("Blick")
             for (i in ScreenLayout.sorted(if (wide) ScreenLayout.BASE else ScreenLayout.BASE + extras)) {
-                FilterChip(
-                    selected = look == i,
-                    onClick = { DexController.lookAt(i) },
-                    label = { Text(ScreenLayout.shortName(i)) },
-                )
+                Pill(ScreenLayout.shortName(i), look == i, { DexController.lookAt(i) })
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically) {

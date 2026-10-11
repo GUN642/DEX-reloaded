@@ -18,17 +18,18 @@ object WindowChrome {
         val bmp = Bitmap.createBitmap(w, H, Bitmap.Config.ARGB_8888)
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = H * 0.45f
-            typeface = Typeface.DEFAULT_BOLD
+            textSize = H * 0.36f
+            typeface = GlassFonts.mono
+            letterSpacing = 0.06f
         }
-        Canvas(bmp).drawText(title, 0f, H / 2f + p.textSize * 0.35f, p)
+        Canvas(bmp).drawText(title.uppercase(), 0f, H / 2f + p.textSize * 0.35f, p)
         return bmp
     }
 
     fun closeBitmap(): Bitmap {
         val bmp = Bitmap.createBitmap(H, H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        c.drawColor(Color.rgb(0xC6, 0x28, 0x28))
+        c.drawColor(Color.rgb(0xD7, 0x19, 0x21))
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             strokeWidth = H * 0.08f
@@ -44,7 +45,7 @@ object WindowChrome {
     fun maximizeBitmap(): Bitmap {
         val bmp = Bitmap.createBitmap(H, H, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        c.drawColor(Color.rgb(0x2A, 0x2F, 0x35))
+        c.drawColor(Color.rgb(0x1A, 0x1A, 0x1A))
         val p = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             style = Paint.Style.STROKE

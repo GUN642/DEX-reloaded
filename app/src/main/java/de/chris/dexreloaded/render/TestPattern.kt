@@ -6,7 +6,7 @@ import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
-import android.graphics.Typeface
+import android.graphics.RectF
 
 /** Testbild für einen Bildschirm ohne App. */
 object TestPattern {
@@ -22,50 +22,45 @@ object TestPattern {
     fun create(index: Int, width: Int = 1280, height: Int = 720): Bitmap {
         val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val c = Canvas(bmp)
-        val base = COLORS[index % COLORS.size]
-        val bg = Paint().apply {
-            shader = LinearGradient(0f, 0f, 0f, height.toFloat(), base, Color.BLACK, Shader.TileMode.CLAMP)
+        // Nothing-Stil: Schwarz, Punktraster, Titel in Punktmatrix, roter Punkt
+        c.drawColor(Color.BLACK)
+        val dot = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(40, 255, 255, 255) }
+        val step = 24f
+        var y = step / 2f
+        while (y < height) {
+            var x = step / 2f
+            while (x < width) {
+                c.drawCircle(x, y, 1.6f, dot)
+                x += step
+            }
+            y += step
         }
-        c.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bg)
-
-        val grid = Paint().apply {
-            color = Color.argb(60, 255, 255, 255)
-            strokeWidth = 2f
-        }
-        var x = 0f
-        while (x <= width) {
-            c.drawLine(x, 0f, x, height.toFloat(), grid)
-            x += 80f
-        }
-        var y = 0f
-        while (y <= height) {
-            c.drawLine(0f, y, width.toFloat(), y, grid)
-            y += 80f
-        }
-
-        val border = Paint().apply {
-            color = Color.WHITE
+        val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.argb(70, 255, 255, 255)
             style = Paint.Style.STROKE
-            strokeWidth = 8f
+            strokeWidth = 3f
         }
-        c.drawRect(4f, 4f, width - 4f, height - 4f, border)
-        // Kreis prüft das Seitenverhältnis
-        c.drawCircle(width / 2f, height / 2f, height / 4f, border)
+        c.drawRoundRect(RectF(6f, 6f, width - 6f, height - 6f), 28f, 28f, border)
 
+        val name = ScreenLayout.name(index).uppercase()
         val title = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = if (ScreenLayout.name(index).length > 12) height / 11f else height / 7f
-            typeface = Typeface.DEFAULT_BOLD
+            typeface = GlassFonts.dot
             textAlign = Paint.Align.CENTER
+            textSize = height / 7f
         }
-        c.drawText(ScreenLayout.name(index), width / 2f, height / 2f + title.textSize / 3f, title)
+        while (title.measureText(name) > width * 0.86f) title.textSize *= 0.92f
+        c.drawText(name, width / 2f, height / 2f + title.textSize / 3f, title)
+        c.drawCircle(width / 2f, height / 2f - title.textSize, 9f, Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(0xD7, 0x19, 0x21) })
 
         val sub = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.argb(200, 255, 255, 255)
-            textSize = height / 18f
+            color = Color.argb(160, 255, 255, 255)
+            textSize = height / 26f
             textAlign = Paint.Align.CENTER
+            typeface = GlassFonts.mono
+            letterSpacing = 0.1f
         }
-        c.drawText("DEX reloaded · Testfläche", width / 2f, height * 0.85f, sub)
+        c.drawText("DEX RELOADED · APP WÄHLEN", width / 2f, height * 0.84f, sub)
         return bmp
     }
 }

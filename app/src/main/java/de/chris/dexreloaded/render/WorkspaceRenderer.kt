@@ -429,7 +429,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
         if (wideMode) {
             // Hintergrundbild über die ganze gebogene Fläche, in voller Auflösung
-            if (wallTexture != 0) use2d(wallTexture) else useColor(0.05f, 0.07f, 0.1f, 1f)
+            if (wallTexture != 0) use2d(wallTexture) else useColor(0f, 0f, 0f, 1f)
             drawStrip(0f, 0f, canvasW(), pixelH[0], 1f)
             // Startbildschirm (normales 1920er Display) in der Mitte darüber
             val bg = streams[BG_ID]
@@ -539,10 +539,10 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
                 tex
             }
             // Rahmen
-            useColor(0.25f, 0.27f, 0.3f, 1f)
+            useColor(0.2f, 0.2f, 0.2f, 1f)
             drawStrip(w.x - 1f, w.y - t - 1f, w.x + w.w + 1f, w.y + w.h + 1f, 0.999f)
             // Titelleiste
-            useColor(0.12f, 0.14f, 0.16f, 1f)
+            useColor(0.04f, 0.04f, 0.04f, 1f)
             drawStrip(w.x, w.y - t, w.x + w.w, w.y, 0.999f)
             use2d(title)
             val titleW = minOf(t * WindowChrome.TITLE_ASPECT, w.w - 2 * t)

@@ -155,11 +155,22 @@ object HomeStore {
     private fun defaultWide(): Bitmap {
         val w = WALL_W * 3
         val bmp = Bitmap.createBitmap(w, WALL_H, Bitmap.Config.ARGB_8888)
-        val colors = intArrayOf(0xFF0D1B2A.toInt(), 0xFF1B263B.toInt(), 0xFF274060.toInt(), 0xFF0B3C49.toInt())
-        val paint = android.graphics.Paint().apply {
-            shader = android.graphics.LinearGradient(0f, 0f, w.toFloat(), WALL_H.toFloat(), colors, null, android.graphics.Shader.TileMode.CLAMP)
+        // Nothing-Stil: Schwarz mit Punktraster (wie der Startbildschirm ohne eigenes Bild)
+        val c = Canvas(bmp)
+        c.drawColor(android.graphics.Color.BLACK)
+        val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(23, 255, 255, 255)
         }
-        Canvas(bmp).drawRect(0f, 0f, w.toFloat(), WALL_H.toFloat(), paint)
+        val step = 36f
+        var y = step / 2f
+        while (y < WALL_H) {
+            var x = step / 2f
+            while (x < w) {
+                c.drawCircle(x, y, 2.1f, paint)
+                x += step
+            }
+            y += step
+        }
         return bmp
     }
 
