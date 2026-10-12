@@ -110,7 +110,7 @@ fun TrackpadScreen(onClose: () -> Unit) {
                 PadKey("Zurück", Modifier.weight(1f)) { DexController.back() }
                 PadKey("Home", Modifier.weight(1f), accent = true) { DexController.goHome() }
                 PadKey("⇄ Apps", Modifier.weight(1f)) { DexController.switchToPrevious() }
-                PadKey(if (cinema) "Kino aus" else "Kino", Modifier.weight(1f), enabled = !wide && !monitor, selected = cinema && !monitor) {
+                PadKey(if (cinema) "Kino aus" else "Kino", Modifier.weight(1f), enabled = !wide, selected = cinema) {
                     DexController.setCinema(!cinema)
                 }
             }
