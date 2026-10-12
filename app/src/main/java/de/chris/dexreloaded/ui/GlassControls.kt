@@ -92,15 +92,15 @@ fun GlassCard(onShowPresentation: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Kinomodus")
                 Text(
-                    if (monitor) "Nur mit Brille."
+                    if (monitor && shown) "Test auf dem Monitor: Maus oder Trackpad bewegt den Blick, „Mitte“ schaut wieder nach vorn. Klicks gehen nicht an die App."
                     else if (wide) "Nur ohne Breitbild. Im Breitbild ein Fenster maximieren."
                     else "Ein großer Bildschirm, fest im Raum. Zeigt den Bildschirm, auf den du gerade schaust. Mit ◀ ▶ wechseln.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Switch(checked = cinema, enabled = !wide && !monitor, onCheckedChange = { DexController.setCinema(it) })
+            Switch(checked = cinema, enabled = !wide, onCheckedChange = { DexController.setCinema(it) })
         }
-        if (cinema && !wide && !monitor) {
+        if (cinema && !wide) {
             var cs by remember(settings.cinemaSize) { mutableFloatStateOf(settings.cinemaSize) }
             Text("Größe im Kino: ${(cs * 100).roundToInt()} %")
             Slider(

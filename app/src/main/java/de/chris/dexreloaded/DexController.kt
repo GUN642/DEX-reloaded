@@ -220,7 +220,10 @@ object DexController {
     private val _cinema = MutableStateFlow(false)
     val cinema: StateFlow<Boolean> = _cinema.asStateFlow()
 
-    private val cinemaActive get() = _cinema.value && !wide && !monitor
+    private val cinemaActive get() = _cinema.value && !wide
+
+    /** Kino auf dem Monitor (Test ohne Brille): Maus schaut sich um statt den Zeiger zu bewegen. */
+    private val monitorCinema get() = monitor && cinemaActive
 
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
@@ -482,6 +485,7 @@ object DexController {
     }
 
     fun setCinema(on: Boolean) {
+        renderer.resetMouseLook()
         _cinema.value = on
         prefs.edit().putBoolean("cinema", on).apply()
         applyLayout()
@@ -503,6 +507,7 @@ object DexController {
 
     fun recenter() {
         HeadTracker.recenter()
+        renderer.resetMouseLook()
     }
 
     /**
@@ -807,6 +812,10 @@ object DexController {
 
     /** Relative Bewegung in Pixeln der Bildschirme. */
     fun movePointer(dx: Float, dy: Float) {
+        if (monitorCinema) {
+            renderer.addMouseLook(dx * 0.08f, -dy * 0.08f)
+            return
+        }
         val (w, h) = screenSize(pointerScreen)
         pointerX += dx
         pointerY += dy
@@ -867,6 +876,7 @@ object DexController {
 
     fun pointerDown() {
         onTextContextLost?.invoke()
+        if (monitorCinema) return
         if (handleOverlayClick()) return
         if (wide) {
             WideDesk.pointerDown(canvasX(), pointerY)
@@ -927,6 +937,7 @@ object DexController {
     }
 
     fun pointerUp() {
+        if (monitorCinema) return
         if (wide) {
             WideDesk.pointerUp(canvasX(), pointerY)
             return
@@ -944,6 +955,7 @@ object DexController {
 
     /** Mausrad: positive v scrollt nach oben. */
     fun scroll(h: Float, v: Float) {
+        if (monitorCinema) return
         if (wide) {
             WideDesk.scroll(canvasX(), pointerY, h, v)
             return

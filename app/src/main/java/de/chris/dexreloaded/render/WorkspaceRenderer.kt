@@ -104,7 +104,28 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             geometryDirty = true
         }
 
-    private fun cinemaActive() = cinemaScreen >= 0 && !wideMode && !monitorMode
+    private fun cinemaActive() = cinemaScreen >= 0 && !wideMode
+
+    /** Flach zeichnen: Monitor ohne Kino. Das Kino ist auch auf dem Monitor 3D (zum Ansehen ohne Brille). */
+    private fun flat() = monitorMode && !cinemaActive()
+
+    /** Blick per Maus, nur Kino auf dem Monitor (Grad). */
+    @Volatile
+    private var mouseYaw = 0f
+
+    @Volatile
+    private var mousePitch = 0f
+
+    /** Kino auf dem Monitor: Maus dreht den Blick. */
+    fun addMouseLook(dYawDeg: Float, dPitchDeg: Float) {
+        mouseYaw = (mouseYaw + dYawDeg).let { if (it > 180f) it - 360f else if (it < -180f) it + 360f else it }
+        mousePitch = (mousePitch + dPitchDeg).coerceIn(-85f, 85f)
+    }
+
+    fun resetMouseLook() {
+        mouseYaw = 0f
+        mousePitch = 0f
+    }
 
     /**
      * Monitor-Modus: normaler externer Bildschirm statt Brille. Alles flach und pixelgenau,
@@ -432,7 +453,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             }
         }
 
-        if (monitorMode) {
+        if (flat()) {
             drawMonitor()
             return
         }
@@ -446,8 +467,12 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         pitchOffset += (pitchTarget - pitchOffset) * 0.2f
         var yaw = yawOffset
         var pitch = pitchOffset
-        // Im Kino folgt die Ansicht immer dem Kopf, die Leinwand bleibt fest im Raum
-        if ((headTracking || cinema) && HeadTracker.compute(head)) {
+        // Im Kino folgt die Ansicht immer dem Kopf, die Leinwand bleibt fest im Raum.
+        // Auf dem Monitor ersetzt die Maus den Kopf.
+        if (monitorMode) {
+            yaw += mouseYaw
+            pitch += mousePitch
+        } else if ((headTracking || cinema) && HeadTracker.compute(head)) {
             if (snapMode && !cinema) {
                 snapView(yawTarget + head[0], pitchTarget + head[1])
                 yaw = snapYawCur
@@ -574,7 +599,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     /** Punkt der Breitbildfläche (Pixel) auf dem Zylinder mit Radius [scale] um den Betrachter. */
     private fun canvasPoint(cx: Float, cy: Float, scale: Float, out: FloatArray, at: Int) {
-        if (monitorMode) {
+        if (flat()) {
             out[at] = cx
             out[at + 1] = cy
             out[at + 2] = 0f
@@ -592,7 +617,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
      */
     private fun drawStrip(x0: Float, y0: Float, x1: Float, y1: Float, scale: Float, u0: Float = 0f, u1: Float = 1f) {
         if (x1 <= x0) return
-        val cols = if (monitorMode) 1 else ((x1 - x0) / STRIP_SEG_PX).toInt().coerceIn(1, MAX_STRIP_COLS)
+        val cols = if (flat()) 1 else ((x1 - x0) / STRIP_SEG_PX).toInt().coerceIn(1, MAX_STRIP_COLS)
         var p = 0
         for (c in 0..cols) {
             val t = c.toFloat() / cols
@@ -725,7 +750,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     /** Punkt auf Bildschirm [i] in Pixeln (px, py) als 3D-Punkt. [scale] < 1 rückt näher heran. */
     private fun panelPoint(i: Int, px: Float, py: Float, scale: Float, out: FloatArray, at: Int) {
-        if (monitorMode) {
+        if (flat()) {
             out[at] = deskX(i) + px
             out[at + 1] = py
             out[at + 2] = 0f
@@ -762,6 +787,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private fun drawNavBar() {
         val i = pointerScreen
         if (i !in 0 until MAX_SCREENS || panels[i] == null || !streams.containsKey(i)) return
+        if (monitorMode && cinemaActive()) return
         val w = pixelW[i]
         val h = pixelH[i]
         val tex: Int
@@ -785,6 +811,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     private fun drawPointer() {
         val i = pointerScreen
         if (i !in 0 until MAX_SCREENS || panels[i] == null) return
+        // Kino auf dem Monitor: Maus schaut sich um, kein Zeiger
+        if (monitorMode && cinemaActive()) return
         val px = pointerX
         val py = pointerY
         val size = POINTER_PX * pixelH[i] / 1080f
@@ -806,7 +834,9 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     /** Projektion aus dem Sichtfeld der Brille und Flächen passend dazu. */
     private fun rebuildGeometry() {
         geometryDirty = false
-        val tanDiag = tan(Math.toRadians(diagonalFov / 2.0)).toFloat()
+        // Monitor (Kino zum Ansehen): weiteres Sichtfeld als die Brille
+        val fov = if (monitorMode) 80f else diagonalFov
+        val tanDiag = tan(Math.toRadians(fov / 2.0)).toFloat()
         val tanV = tanDiag / sqrt(1f + aspect * aspect)
         val tanH = tanV * aspect
         val vfovDeg = Math.toDegrees(2.0 * atan(tanV.toDouble())).toFloat()
