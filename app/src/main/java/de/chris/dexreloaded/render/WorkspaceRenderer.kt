@@ -104,11 +104,36 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             geometryDirty = true
         }
 
-    private fun cinemaActive() = cinemaScreen >= 0 && !wideMode
+    private fun cinemaActive() = cinemaScreen >= 0 && !wideMode && !monitorMode
+
+    /**
+     * Monitor-Modus: normaler externer Bildschirm statt Brille. Alles flach und pixelgenau,
+     * kein Kopf-Tracking. Ohne Breitbild sind die Bildschirme Arbeitsflächen nebeneinander,
+     * sichtbar ist die gewählte (Wechsel mit kurzem Schieben).
+     */
+    @Volatile
+    var monitorMode = false
+        set(value) {
+            field = value
+            geometryDirty = true
+        }
+
+    private var surfW = 1920f
+    private var surfH = 1080f
+    private var slidePos = 1f
+
+    /** Erster Bildschirm der Breitbildfläche: Brille 0 (drei Bildschirme), Monitor 1 (nur einer). */
+    private fun wideFirst() = if (monitorMode) 1 else 0
+
+    private fun deskIndex(i: Int) = ScreenLayout.sorted(activeScreens).indexOf(i).coerceAtLeast(0)
+
+    /** Linker Rand der Arbeitsfläche [i] auf dem Monitor, in Pixeln. */
+    private fun deskX(i: Int) = (deskIndex(i) - slidePos) * surfW
 
     /** Bildschirme, die gerade gezeichnet werden. */
     private fun visibleScreens(): Collection<Int> = when {
         cinemaActive() -> listOf(cinemaScreen)
+        wideMode && monitorMode -> listOf(1)
         wideMode -> ScreenLayout.BASE
         else -> activeScreens
     }
@@ -309,7 +334,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             if (tex == 0 || panels.getOrNull(o.screen) == null) continue
             use2d(tex)
             if (wideMode) {
-                val cx = o.screen * pixelW[0] + o.x
+                val cx = (o.screen - wideFirst()) * pixelW[0] + o.x
                 drawStrip(cx, o.y, cx + o.w, o.y + o.h, 0.996f)
             } else {
                 fillQuad(o.screen, o.x, o.y, o.x + o.w, o.y + o.h, 0.996f)
@@ -382,6 +407,8 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         GLES30.glViewport(0, 0, width, height)
         aspect = width.toFloat() / height.coerceAtLeast(1)
+        surfW = width.toFloat()
+        surfH = height.toFloat()
         geometryDirty = true
     }
 
@@ -403,6 +430,11 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
                 s.surfaceTexture.getTransformMatrix(s.texMatrix)
                 s.hasFrame = true
             }
+        }
+
+        if (monitorMode) {
+            drawMonitor()
+            return
         }
 
         // Blickrichtung: Kopf plus sanft angefahrener Versatz. Kino: fest geradeaus.
@@ -474,6 +506,36 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GlUtil.checkError("onDrawFrame")
     }
 
+    /** Monitor: flach in Pixeln, ohne Tiefe. */
+    private fun drawMonitor() {
+        Matrix.orthoM(mvp, 0, 0f, surfW, surfH, 0f, -1f, 1f)
+        GLES30.glClear(GLES30.GL_COLOR_BUFFER_BIT or GLES30.GL_DEPTH_BUFFER_BIT)
+        GLES30.glDepthFunc(GLES30.GL_ALWAYS)
+        if (wideMode) {
+            val bg = streams[BG_ID]
+            if (bg != null && bg.hasFrame) useOes(bg) else useColor(0f, 0f, 0f, 1f)
+            drawStrip(0f, 0f, pixelW[1], pixelH[1], 1f)
+            drawWindows()
+        } else {
+            val target = deskIndex(lookIndex).toFloat()
+            slidePos += (target - slidePos) * 0.25f
+            if (kotlin.math.abs(target - slidePos) < 0.002f) slidePos = target
+            for (i in activeScreens) {
+                val x = deskX(i)
+                if (x <= -surfW || x >= surfW) continue
+                val stream = streams[i]
+                if (stream != null && stream.hasFrame) useOes(stream) else use2d(testTextures[i])
+                fillQuad(i, 0f, 0f, pixelW[i], pixelH[i], 1f)
+                drawPanel(Panel(dynamicVbo, 4))
+            }
+            drawNavBar()
+        }
+        drawOverlays()
+        drawPointer()
+        GLES30.glDepthFunc(GLES30.GL_LESS)
+        GlUtil.checkError("drawMonitor")
+    }
+
     private var currentProgram = 0
 
     private fun use2d(tex: Int) {
@@ -512,6 +574,12 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     /** Punkt der Breitbildfläche (Pixel) auf dem Zylinder mit Radius [scale] um den Betrachter. */
     private fun canvasPoint(cx: Float, cy: Float, scale: Float, out: FloatArray, at: Int) {
+        if (monitorMode) {
+            out[at] = cx
+            out[at + 1] = cy
+            out[at + 2] = 0f
+            return
+        }
         val phi = (cx - canvasW() / 2f) * pixelAngle
         out[at] = sin(phi) * scale
         out[at + 1] = (pixelH[0] / 2f - cy) * pixelAngle * scale
@@ -524,7 +592,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
      */
     private fun drawStrip(x0: Float, y0: Float, x1: Float, y1: Float, scale: Float, u0: Float = 0f, u1: Float = 1f) {
         if (x1 <= x0) return
-        val cols = ((x1 - x0) / STRIP_SEG_PX).toInt().coerceIn(1, MAX_STRIP_COLS)
+        val cols = if (monitorMode) 1 else ((x1 - x0) / STRIP_SEG_PX).toInt().coerceIn(1, MAX_STRIP_COLS)
         var p = 0
         for (c in 0..cols) {
             val t = c.toFloat() / cols
@@ -657,6 +725,12 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
 
     /** Punkt auf Bildschirm [i] in Pixeln (px, py) als 3D-Punkt. [scale] < 1 rückt näher heran. */
     private fun panelPoint(i: Int, px: Float, py: Float, scale: Float, out: FloatArray, at: Int) {
+        if (monitorMode) {
+            out[at] = deskX(i) + px
+            out[at + 1] = py
+            out[at + 2] = 0f
+            return
+        }
         val x = (px / pixelW[i] * 2f - 1f) * panelHalfW
         val y = (1f - py / pixelH[i] * 2f) * panelHalfH[i]
         // Punkt (x, y, -1) erst um die Querachse nach oben kippen, dann um die Hochachse drehen
@@ -719,7 +793,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
         use2d(pointerTexture)
         if (wideMode) {
-            val cx = i * pixelW[0] + px
+            val cx = (i - wideFirst()) * pixelW[0] + px
             drawStrip(cx, py, cx + size, py + size, 0.995f)
         } else {
             fillQuad(i, px, py, px + size, py + size, 0.995f)

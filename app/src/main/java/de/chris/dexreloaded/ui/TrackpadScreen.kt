@@ -64,6 +64,7 @@ fun TrackpadScreen(onClose: () -> Unit) {
     val rec by DexController.recording.collectAsState()
     val cinema by DexController.cinema.collectAsState()
     val wide by DexController.wideMode.collectAsState()
+    val monitor by DexController.monitorActive.collectAsState()
     Column(
         Modifier
             .fillMaxSize()
@@ -109,7 +110,7 @@ fun TrackpadScreen(onClose: () -> Unit) {
                 PadKey("Zurück", Modifier.weight(1f)) { DexController.back() }
                 PadKey("Home", Modifier.weight(1f), accent = true) { DexController.goHome() }
                 PadKey("⇄ Apps", Modifier.weight(1f)) { DexController.switchToPrevious() }
-                PadKey(if (cinema) "Kino aus" else "Kino", Modifier.weight(1f), enabled = !wide, selected = cinema) {
+                PadKey(if (cinema) "Kino aus" else "Kino", Modifier.weight(1f), enabled = !wide && !monitor, selected = cinema && !monitor) {
                     DexController.setCinema(!cinema)
                 }
             }

@@ -42,14 +42,35 @@ fun GlassCard(onShowPresentation: () -> Unit) {
     val extras by DexController.extraScreens.collectAsState()
     val wide by DexController.wideMode.collectAsState()
     val cinema by DexController.cinema.collectAsState()
-    Section("Brille") {
+    val monitor by DexController.monitorActive.collectAsState()
+    val displayMode by DexController.displayMode.collectAsState()
+    val monitorScale by DexController.monitorScale.collectAsState()
+    Section("Anzeige") {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Label("Art")
+            Pill("Auto", displayMode == 0, { DexController.setDisplayMode(0) })
+            Pill("Brille", displayMode == 1, { DexController.setDisplayMode(1) })
+            Pill("Monitor", displayMode == 2, { DexController.setDisplayMode(2) })
+        }
+        Text(
+            "Auto: Ist eine Viture angesteckt, Brille mit 3D und Kopf-Tracking. Sonst Monitor: flach und pixelgenau in der Auflösung des Bildschirms, Bildschirme als Arbeitsflächen zum Durchschalten.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         val g = glass
         if (g == null) {
-            Text("Keine Brille erkannt. Brille anstecken und in den Samsung-Einstellungen den HDMI-Modus auf Bildschirm spiegeln stellen. DeX nicht starten.")
+            Text("Kein externes Display erkannt. Brille oder Monitor anstecken und in den Samsung-Einstellungen den HDMI-Modus auf Bildschirm spiegeln stellen. DeX nicht starten.")
             return@Section
         }
         val m = g.mode
-        Text("${g.name}, ${m.physicalWidth}x${m.physicalHeight}, Display ${g.displayId}")
+        Text("${g.name}, ${m.physicalWidth}x${m.physicalHeight}, Display ${g.displayId}" + if (shown) (if (monitor) " · Monitor" else " · Brille") else "")
+        if (displayMode == 2 || (shown && monitor)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Label("Größe")
+                for (f in listOf(0.8f, 1f, 1.25f, 1.5f)) {
+                    Pill("${(f * 100).roundToInt()} %", kotlin.math.abs(monitorScale - f) < 0.01f, { DexController.setMonitorScale(f) })
+                }
+            }
+        }
         if (shown) {
             val rec by DexController.recording.collectAsState()
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -71,14 +92,15 @@ fun GlassCard(onShowPresentation: () -> Unit) {
             Column(Modifier.weight(1f)) {
                 Text("Kinomodus")
                 Text(
-                    if (wide) "Nur ohne Breitbild. Im Breitbild ein Fenster maximieren."
+                    if (monitor) "Nur mit Brille."
+                    else if (wide) "Nur ohne Breitbild. Im Breitbild ein Fenster maximieren."
                     else "Ein großer Bildschirm, fest im Raum. Zeigt den Bildschirm, auf den du gerade schaust. Mit ◀ ▶ wechseln.",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
-            Switch(checked = cinema, enabled = !wide, onCheckedChange = { DexController.setCinema(it) })
+            Switch(checked = cinema, enabled = !wide && !monitor, onCheckedChange = { DexController.setCinema(it) })
         }
-        if (cinema && !wide) {
+        if (cinema && !wide && !monitor) {
             var cs by remember(settings.cinemaSize) { mutableFloatStateOf(settings.cinemaSize) }
             Text("Größe im Kino: ${(cs * 100).roundToInt()} %")
             Slider(
@@ -89,6 +111,7 @@ fun GlassCard(onShowPresentation: () -> Unit) {
             )
         }
 
+        if (monitor && shown) return@Section
         var size by remember(settings.size) { mutableFloatStateOf(settings.size) }
         Text("Größe: ${(size * 100).roundToInt()} %  (100 % = 1920x1080 füllt das Sichtfeld)")
         Slider(
@@ -116,6 +139,7 @@ fun HeadTrackingCard() {
     var yaw by remember { mutableFloatStateOf(0f) }
     var pitch by remember { mutableFloatStateOf(0f) }
     var calibrating by remember { mutableStateOf(false) }
+    val monitor by DexController.monitorActive.collectAsState()
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -128,6 +152,10 @@ fun HeadTrackingCard() {
     if (calibrating) CalibrationDialog(onClose = { calibrating = false })
 
     Section("Kopf-Tracking") {
+        if (monitor && shown) {
+            Text("Im Monitor-Modus nicht nötig, die Arbeitsfläche liegt flach auf dem Bildschirm.", style = MaterialTheme.typography.bodySmall)
+            return@Section
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Kopfdrehung bewegt die Ansicht", modifier = Modifier.weight(1f))
             Switch(

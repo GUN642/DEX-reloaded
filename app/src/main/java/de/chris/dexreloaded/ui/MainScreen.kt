@@ -160,7 +160,7 @@ private fun StartBlock(shown: Boolean, onShow: () -> Unit, onTrackpad: () -> Uni
             modifier = Modifier
                 .fillMaxWidth()
                 .height(58.dp),
-        ) { Text(if (glass != null) "ARBEITSFLÄCHE STARTEN" else "KEINE BRILLE ERKANNT", style = MaterialTheme.typography.labelLarge) }
+        ) { Text(if (glass != null) "ARBEITSFLÄCHE STARTEN" else "KEIN DISPLAY ERKANNT", style = MaterialTheme.typography.labelLarge) }
     } else {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Button(
