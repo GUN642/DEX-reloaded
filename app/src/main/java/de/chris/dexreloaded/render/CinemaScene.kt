@@ -1,13 +1,17 @@
 package de.chris.dexreloaded.render
 
+import android.content.res.Resources
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.opengl.GLES30
+import android.opengl.GLUtils
 import android.os.SystemClock
+import de.chris.dexreloaded.R
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.nio.FloatBuffer
 import kotlin.math.PI
 import kotlin.math.abs
+import kotlin.math.atan
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.max
@@ -16,48 +20,54 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Kinosaal für den Kinomodus: Wände, Decke, ansteigende Sitzreihen, Vorhang, Publikum,
- * eigene Beine mit Popcorn und Getränk. Alles einfache Geometrie mit Farben je Ecke,
- * Licht kommt von der Leinwand (beim Bauen eingerechnet). Nachbarn und Überraschungen
- * sind gemalte Bilder ([CinemaArt]).
+ * Kinosaal für den Kinomodus. Runde, gepolsterte Sitze mit Samt-Textur, ansteigende Reihen,
+ * Teppich, bespannte Wände, Samtvorhang, Projektorlicht. Zuschauer und Nachbarn sind gemalte
+ * Bilder (Star-Wars-Fan-Art, erzeugt mit tools/cinema_art.py). Licht kommt von der Leinwand
+ * und wird je Ecke beim Bauen eingerechnet (weiche Schattierung über Ecken-Normalen).
  *
  * Koordinaten in Metern: Auge im Ursprung, x rechts, y oben, Leinwand bei z = -[SCREEN_DIST].
  * Nur auf dem GL-Thread benutzen.
  */
 class CinemaScene {
 
-    private var colorProgram = 0
-    private var texProgram = 0
-    private var staticVbo = 0
-    private var staticCount = 0
-    private var dynamicVbo = 0
-    private var spriteVbo = 0
-
+    private var program = 0
     private var builtHalfW = -1f
     private var builtHalfH = -1f
 
-    private class Sprite(val bitmap: Bitmap, var texture: Int = 0)
+    // Texturen
+    private var texWhite = 0
+    private var texSeat = 0
+    private var texCurtain = 0
+    private var texCarpet = 0
+    private var texWall = 0
+    private var texAudience = 0
+    private var texYoda = 0
+    private var texYodaTurned = 0
+    private var texVader = 0
+    private var texJawa = 0
+    private var texExit = 0
 
-    private var spriteLeft: Sprite? = null
-    private var spriteLeftTurned: Sprite? = null
-    private var spriteRight: Sprite? = null
-    private var spriteCat: Sprite? = null
-    private var spriteAlien: Sprite? = null
-    private var spriteExit: Sprite? = null
+    /** Fester Teil des Saals, nach Textur getrennt. */
+    private class Batch(val tex: () -> Int, var vbo: Int = 0, var count: Int = 0)
 
-    /** Zeitpunkt, ab dem sich der Vorhang öffnet. */
+    private val batches = mutableListOf<Batch>()
+    private var audienceVbo = 0
+    private var audienceCount = 0
+    private var curtainVbo = 0
+    private var curtainCount = 0
+    private var beamVbo = 0
+    private var beamCount = 0
+    private var spriteVbo = 0
+
     private var curtainStart = 0L
     private var builtOpen = -1f
-    private var curtainCount = 0
-    private var beamCount = 0
-    private val dyn by lazy { Mesh() }
 
-    // Überraschung: Nachbar links dreht sich um, wenn man ihn lange ansieht
+    // Überraschung: Yoda dreht sich um, wenn man ihn lange ansieht
     private var lookStart = 0L
     private var lookAwaySince = 0L
     private var turned = false
 
-    // Saalmaße, aus der Leinwandgröße
+    // Saalmaße
     private var sHalfW = 4f
     private var sHalfH = 2.3f
     private var roomHalfW = 8f
@@ -65,108 +75,88 @@ class CinemaScene {
     private var ceilingY = 4.5f
     private val curtainZ get() = -SCREEN_DIST + 0.18f
 
-    /** Nach neuem GL-Kontext: alles neu anlegen. */
     fun onSurfaceCreated() {
-        colorProgram = GlUtil.program(COLOR_VS, COLOR_FS)
-        texProgram = GlUtil.program(TEX_VS, TEX_FS)
-        val b = IntArray(3)
-        GLES30.glGenBuffers(3, b, 0)
-        staticVbo = b[0]
-        dynamicVbo = b[1]
-        spriteVbo = b[2]
+        program = GlUtil.program(VS, FS)
+        val b = IntArray(4)
+        GLES30.glGenBuffers(4, b, 0)
+        audienceVbo = b[0]
+        curtainVbo = b[1]
+        beamVbo = b[2]
+        spriteVbo = b[3]
+        batches.clear()
         builtHalfW = -1f
         builtOpen = -1f
-        listOf(spriteLeft, spriteLeftTurned, spriteRight, spriteCat, spriteAlien, spriteExit).forEach { it?.texture = 0 }
+        texWhite = 0
     }
 
-    /** Vorhang wieder zu, öffnet sich dann langsam (beim Einschalten des Kinos). */
     fun startShow() {
         curtainStart = SystemClock.uptimeMillis()
         builtOpen = -1f
     }
 
-    /**
-     * Zeichnet den Saal. [halfW], [halfH]: halbe Leinwandgröße im Abstand 1.
-     * [drawScreen] zeichnet die Leinwand selbst (im Abstand [SCREEN_DIST]).
-     */
     fun draw(mvp: FloatArray, yawDeg: Float, pitchDeg: Float, halfW: Float, halfH: Float, drawScreen: () -> Unit) {
+        if (texWhite == 0) loadTextures()
         if (halfW != builtHalfW || halfH != builtHalfH) build(halfW, halfH)
-        ensureSprites()
         val now = SystemClock.uptimeMillis()
         val open = smooth(((now - curtainStart) / 1000f - 0.8f) / 4f)
         // Saallicht dimmt herunter, während der Vorhang aufgeht
-        val bright = 1.9f - 0.9f * open
+        val bright = 1.6f - 0.6f * open
 
         GLES30.glEnable(GLES30.GL_DEPTH_TEST)
         GLES30.glDepthMask(true)
-
-        // Leinwand
         drawScreen()
 
-        // Saal, Sitze, Publikum, eigene Beine
-        useColor(mvp, bright)
-        drawColored(staticVbo, staticCount)
+        GLES30.glUseProgram(program)
+        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(program, "uMvp"), 1, false, mvp, 0)
+        GLES30.glUniform1i(GLES30.glGetUniformLocation(program, "uTex"), 0)
+        setBright(bright)
+        for (b in batches) drawMesh(b.vbo, b.count, b.tex())
 
-        // Vorhang und Lichtkegel nur neu bauen, solange sie sich bewegen
         if (open != builtOpen) {
             builtOpen = open
-            dyn.size = 0
-            buildCurtains(dyn, open)
-            curtainCount = dyn.count
-            buildBeam(dyn, open)
-            beamCount = dyn.count - curtainCount
-            upload(dynamicVbo, dyn)
+            val c = Mesh()
+            buildCurtains(c, open)
+            curtainCount = upload(curtainVbo, c)
+            val bm = Mesh()
+            buildBeam(bm, open)
+            beamCount = upload(beamVbo, bm)
         }
-        drawColored(dynamicVbo, curtainCount)
+        drawMesh(curtainVbo, curtainCount, texCurtain)
 
-        // Lichtkegel des Projektors, nur Licht dazu
+        // Durchscheinendes: Zuschauer, Nachbarn, Schild, Lichtkegel
         GLES30.glEnable(GLES30.GL_BLEND)
-        GLES30.glBlendFunc(GLES30.GL_SRC_ALPHA, GLES30.GL_ONE)
         GLES30.glDepthMask(false)
-        useColor(mvp, 1f)
-        drawColored(dynamicVbo, beamCount, first = curtainCount)
-
-        // Gemalte Figuren
         GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE_MINUS_SRC_ALPHA)
+        setBright(min(1.1f, bright * 0.8f))
+        drawMesh(audienceVbo, audienceCount, texAudience)
         updateEasterEgg(yawDeg, pitchDeg, now)
-        GLES30.glUseProgram(texProgram)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(texProgram, "uMvp"), 1, false, mvp, 0)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(texProgram, "uBright"), min(bright, 1.4f))
-        GLES30.glUniform1i(GLES30.glGetUniformLocation(texProgram, "uTex"), 0)
-        // Nachbar links (Ebene x = -0,62, Gesicht zur Leinwand zeigt im Blick nach links nach rechts)
-        sideSprite(if (turned) spriteLeftTurned else spriteLeft, -NEIGHBOR_X, flipU = true)
-        sideSprite(spriteRight, NEIGHBOR_X, flipU = false)
-        // Katze schaut drei Reihen vorn links über die Lehne
-        spriteCat?.let { s ->
-            val z = rowZ(-3) + BACK_Z1 + 0.03f
-            val x = seatX(-3, -3)
-            val top = floorY(rowZ(-3)) + BACK_TOP
-            facingSprite(s, x, top - 0.10f, z, CinemaArt.CAT_W, CinemaArt.CAT_H)
+        sideSprite(if (turned) texYodaTurned else texYoda, -NEIGHBOR_X, flipU = true)
+        sideSprite(texVader, NEIGHBOR_X, flipU = false)
+        // Jawa schaut drei Reihen vorn links über die Lehne
+        run {
+            val k = -3
+            val x = seatX(k, -3)
+            val z = rowZ(k) + BACK_Z1 + 0.06f
+            facing(texJawa, x, floorY(rowZ(k)) + BACK_TOP - 0.14f, z, 0.3f, 0.26f)
         }
-        // Außerirdischer weiter vorn rechts
-        spriteAlien?.let { s ->
-            val z = rowZ(-5) + 0.12f
-            val x = seatX(-5, 4)
-            val fy = floorY(rowZ(-5))
-            facingSprite(s, x, fy + 0.92f, z, CinemaArt.ALIEN_W, CinemaArt.ALIEN_H)
-        }
-        // Notausgang an der linken Wand vorn
-        spriteExit?.let { s ->
-            val x = -roomHalfW + 0.02f
-            wallSprite(s, x, 2.0f, -SCREEN_DIST + 2.5f, CinemaArt.EXIT_W, CinemaArt.EXIT_H)
-        }
+        wallSprite(texExit, -roomHalfW + 0.02f, 2.0f, -SCREEN_DIST + 2.5f, 0.9f, 0.3f)
+        // Farbe ist schon mit Alpha multipliziert, darum nur addieren
+        GLES30.glBlendFunc(GLES30.GL_ONE, GLES30.GL_ONE)
+        setBright(1f)
+        drawMesh(beamVbo, beamCount, texWhite)
 
+        GLES30.glDisableVertexAttribArray(2)
         GLES30.glDepthMask(true)
         GLES30.glDisable(GLES30.GL_BLEND)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
     }
 
-    // ---- Überraschung ----
+    private fun setBright(b: Float) {
+        GLES30.glUniform1f(GLES30.glGetUniformLocation(program, "uBright"), b)
+    }
 
     private fun updateEasterEgg(yawDeg: Float, pitchDeg: Float, now: Long) {
-        // Richtung zum Kopf des linken Nachbarn
-        val target = -90f
-        val looking = abs(yawDeg - target) < 30f && pitchDeg > -35f && pitchDeg < 30f
+        val looking = abs(yawDeg + 90f) < 30f && pitchDeg > -45f && pitchDeg < 25f
         if (looking) {
             lookAwaySince = 0L
             if (lookStart == 0L) lookStart = now
@@ -180,227 +170,278 @@ class CinemaScene {
         }
     }
 
+    // ---- Texturen ----
+
+    private fun loadTextures() {
+        texWhite = makeTexture(Bitmap.createBitmap(intArrayOf(-1), 1, 1, Bitmap.Config.ARGB_8888), repeat = false, mip = false)
+        val res = resources
+        fun load(id: Int, repeat: Boolean): Int {
+            if (res == null) return texWhite
+            val opts = BitmapFactory.Options().apply { inScaled = false; inPremultiplied = true }
+            val bmp = BitmapFactory.decodeResource(res, id, opts) ?: return texWhite
+            return makeTexture(bmp, repeat, mip = true).also { bmp.recycle() }
+        }
+        texSeat = load(R.drawable.cinema_seat, false)
+        texCurtain = load(R.drawable.cinema_curtain, true)
+        texCarpet = load(R.drawable.cinema_carpet, true)
+        texWall = load(R.drawable.cinema_wall, true)
+        texAudience = load(R.drawable.cinema_audience, false)
+        texYoda = load(R.drawable.cinema_yoda, false)
+        texYodaTurned = load(R.drawable.cinema_yoda_turned, false)
+        texVader = load(R.drawable.cinema_vader, false)
+        texJawa = load(R.drawable.cinema_jawa, false)
+        texExit = load(R.drawable.cinema_exit, false)
+    }
+
+    private fun makeTexture(bmp: Bitmap, repeat: Boolean, mip: Boolean): Int {
+        val t = IntArray(1)
+        GLES30.glGenTextures(1, t, 0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, t[0])
+        val wrap = if (repeat) GLES30.GL_REPEAT else GLES30.GL_CLAMP_TO_EDGE
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, wrap)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, wrap)
+        GLES30.glTexParameteri(
+            GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER,
+            if (mip) GLES30.GL_LINEAR_MIPMAP_LINEAR else GLES30.GL_LINEAR,
+        )
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLUtils.texImage2D(GLES30.GL_TEXTURE_2D, 0, bmp, 0)
+        if (mip) GLES30.glGenerateMipmap(GLES30.GL_TEXTURE_2D)
+        return t[0]
+    }
+
     // ---- Bauen ----
 
     private fun build(halfW: Float, halfH: Float) {
-        builtOpen = -1f
         builtHalfW = halfW
         builtHalfH = halfH
+        builtOpen = -1f
         sHalfW = halfW * SCREEN_DIST
         sHalfH = halfH * SCREEN_DIST
         roomHalfW = max(7.6f, sHalfW + 3.2f)
         frontFloorY = min(floorY(rowZ(FRONT_ROWS)) - 0.15f, -sHalfH - 0.35f)
         ceilingY = max(4.6f, sHalfH + 2.2f)
-        val m = Mesh()
-        buildRoom(m)
-        buildSeats(m)
-        buildSelf(m)
-        upload(staticVbo, m)
-        staticCount = m.count
+
+        val plain = Mesh()
+        val seat = Mesh()
+        val carpet = Mesh()
+        val wall = Mesh()
+        buildRoom(plain, carpet, wall)
+        buildSeats(plain, seat)
+        buildSelf(plain)
+        batches.forEach { GLES30.glDeleteBuffers(1, intArrayOf(it.vbo), 0) }
+        batches.clear()
+        for ((m, tex) in listOf(plain to { texWhite }, seat to { texSeat }, carpet to { texCarpet }, wall to { texWall })) {
+            val ids = IntArray(1)
+            GLES30.glGenBuffers(1, ids, 0)
+            val b = Batch(tex, ids[0])
+            b.count = upload(b.vbo, m)
+            batches.add(b)
+        }
+        val aud = Mesh()
+        buildAudience(aud)
+        audienceCount = upload(audienceVbo, aud)
     }
 
     private fun rowZ(k: Int) = k * ROW_DEPTH
 
-    /** Boden der Reihe bei z: vorn tiefer (ansteigende Reihen). */
     private fun floorY(z: Float) = -EYE_HEIGHT + ROW_RISE * z / ROW_DEPTH
 
-    /** Sitzmitte: Reihen versetzt, damit vorne niemand genau vor einem sitzt. */
     private fun seatX(k: Int, j: Int) = (j + if (k % 2 != 0) 0.5f else 0f) * SEAT_W
 
-    private fun buildRoom(m: Mesh) {
-        m.twoSidedDefault = true
+    private fun seatVisible(x: Float) = abs(x) <= roomHalfW - 0.9f
+
+    private fun buildRoom(plain: Mesh, carpet: Mesh, wall: Mesh) {
         val back = rowZ(BACK_ROWS) + 1.0f
         val front = -SCREEN_DIST - 0.3f
-        val wall = floatArrayOf(0.22f, 0.07f, 0.08f)
-        val dark = floatArrayOf(0.04f, 0.04f, 0.045f)
-        val carpet = floatArrayOf(0.13f, 0.06f, 0.07f)
+        val dark = floatArrayOf(0.03f, 0.03f, 0.035f)
+        val white = floatArrayOf(1f, 1f, 1f)
 
-        // Boden vor der ersten Reihe (tiefer, bis zur Leinwand)
+        // Boden vor der ersten Reihe und Stufen
         val firstEdge = rowZ(FRONT_ROWS) - ROW_DEPTH / 2f
-        m.quadLit(
-            v(-roomHalfW, frontFloorY, front), v(roomHalfW, frontFloorY, front),
-            v(roomHalfW, frontFloorY, firstEdge), v(-roomHalfW, frontFloorY, firstEdge), carpet,
-        )
-        // Stufen der Reihen: Trittfläche und Setzstufe
+        carpet.quadFlat(v(-roomHalfW, frontFloorY, firstEdge), v(roomHalfW, frontFloorY, firstEdge), v(roomHalfW, frontFloorY, front), v(-roomHalfW, frontFloorY, front), white, uvScale = 1.2f, uvPlane = UV_XZ)
         for (k in FRONT_ROWS..BACK_ROWS) {
             val z0 = rowZ(k) - ROW_DEPTH / 2f
             val z1 = rowZ(k) + ROW_DEPTH / 2f
             val fy = floorY(rowZ(k))
-            m.quadLit(v(-roomHalfW, fy, z0), v(roomHalfW, fy, z0), v(roomHalfW, fy, z1), v(-roomHalfW, fy, z1), carpet)
+            carpet.quadFlat(v(-roomHalfW, fy, z1), v(roomHalfW, fy, z1), v(roomHalfW, fy, z0), v(-roomHalfW, fy, z0), white, uvScale = 1.2f, uvPlane = UV_XZ)
             val lower = if (k == FRONT_ROWS) frontFloorY else floorY(rowZ(k - 1))
-            m.quadLit(v(-roomHalfW, lower, z0), v(roomHalfW, lower, z0), v(roomHalfW, fy, z0), v(-roomHalfW, fy, z0), dark)
-            // Kleine Stufenlichter am Rand
+            plain.quadFlat(v(-roomHalfW, fy, z0), v(roomHalfW, fy, z0), v(roomHalfW, lower, z0), v(-roomHalfW, lower, z0), dark)
             for (sx in listOf(-roomHalfW + 0.25f, roomHalfW - 0.25f)) {
-                m.quadEmit(v(sx - 0.05f, fy + 0.01f, z0 + 0.02f), v(sx + 0.05f, fy + 0.01f, z0 + 0.02f),
-                    v(sx + 0.05f, fy + 0.04f, z0 + 0.02f), v(sx - 0.05f, fy + 0.04f, z0 + 0.02f), floatArrayOf(0.9f, 0.65f, 0.3f))
+                plain.quadEmit(v(sx - 0.05f, fy + 0.01f, z0 - 0.01f), v(sx + 0.05f, fy + 0.01f, z0 - 0.01f),
+                    v(sx + 0.05f, fy + 0.035f, z0 - 0.01f), v(sx - 0.05f, fy + 0.035f, z0 - 0.01f), floatArrayOf(0.7f, 0.5f, 0.22f))
             }
         }
-        // Seitenwände in Paneelen, mit Wandleuchten
-        var z = front
-        var i = 0
-        while (z < back) {
-            val z2 = min(back, z + 1.4f)
-            val shadeF = if (i % 2 == 0) 1f else 0.82f
-            val c = floatArrayOf(wall[0] * shadeF, wall[1] * shadeF, wall[2] * shadeF)
-            m.quadLit(v(-roomHalfW, frontFloorY, z), v(-roomHalfW, frontFloorY, z2), v(-roomHalfW, ceilingY, z2), v(-roomHalfW, ceilingY, z), c)
-            m.quadLit(v(roomHalfW, frontFloorY, z2), v(roomHalfW, frontFloorY, z), v(roomHalfW, ceilingY, z), v(roomHalfW, ceilingY, z2), c)
-            if (i % 3 == 1) {
-                val warm = floatArrayOf(1.0f, 0.62f, 0.28f)
-                val zc = (z + z2) / 2f
-                m.quadEmit(v(-roomHalfW + 0.03f, 1.3f, zc + 0.1f), v(-roomHalfW + 0.03f, 1.3f, zc - 0.1f),
-                    v(-roomHalfW + 0.03f, 1.6f, zc - 0.1f), v(-roomHalfW + 0.03f, 1.6f, zc + 0.1f), warm)
-                m.quadEmit(v(roomHalfW - 0.03f, 1.3f, zc - 0.1f), v(roomHalfW - 0.03f, 1.3f, zc + 0.1f),
-                    v(roomHalfW - 0.03f, 1.6f, zc + 0.1f), v(roomHalfW - 0.03f, 1.6f, zc - 0.1f), warm)
+        // Seitenwände (Stoff), Wandleuchten
+        for (side in listOf(-1f, 1f)) {
+            val x = side * roomHalfW
+            if (side < 0) {
+                wall.quadFlat(v(x, frontFloorY, front), v(x, frontFloorY, back), v(x, ceilingY, back), v(x, ceilingY, front), white, uvScale = 1.4f, uvPlane = UV_ZY)
+            } else {
+                wall.quadFlat(v(x, frontFloorY, back), v(x, frontFloorY, front), v(x, ceilingY, front), v(x, ceilingY, back), white, uvScale = 1.4f, uvPlane = UV_ZY)
             }
-            z = z2
-            i++
+            var z = front + 2.2f
+            while (z < back - 0.5f) {
+                val xi = x - side * 0.03f
+                plain.quadEmit(v(xi, 1.3f, z + 0.08f), v(xi, 1.3f, z - 0.08f), v(xi, 1.55f, z - 0.08f), v(xi, 1.55f, z + 0.08f), floatArrayOf(0.8f, 0.5f, 0.22f))
+                z += 4.2f
+            }
         }
-        // Vorderwand um die Leinwand, Rückwand mit Projektorfenster
-        m.quadLit(v(-roomHalfW, frontFloorY, front), v(roomHalfW, frontFloorY, front), v(roomHalfW, ceilingY, front), v(-roomHalfW, ceilingY, front), dark)
+        // Vorderwand, Rückwand mit Projektorfenster, Decke mit Sternenlichtern
+        plain.quadFlat(v(-roomHalfW, frontFloorY, front), v(roomHalfW, frontFloorY, front), v(roomHalfW, ceilingY, front), v(-roomHalfW, ceilingY, front), dark)
         val backFloor = floorY(rowZ(BACK_ROWS))
-        m.quadLit(v(roomHalfW, backFloor, back), v(-roomHalfW, backFloor, back), v(-roomHalfW, ceilingY, back), v(roomHalfW, ceilingY, back), wall)
-        m.quadEmit(v(0.35f, PROJ_Y - 0.2f, back - 0.02f), v(-0.35f, PROJ_Y - 0.2f, back - 0.02f),
-            v(-0.35f, PROJ_Y + 0.2f, back - 0.02f), v(0.35f, PROJ_Y + 0.2f, back - 0.02f), floatArrayOf(0.95f, 0.95f, 1.0f))
-        // Decke mit kleinen Sternenlichtern
-        m.quadLit(v(-roomHalfW, ceilingY, front), v(-roomHalfW, ceilingY, back), v(roomHalfW, ceilingY, back), v(roomHalfW, ceilingY, front), floatArrayOf(0.03f, 0.03f, 0.035f))
+        wall.quadFlat(v(roomHalfW, backFloor, back), v(-roomHalfW, backFloor, back), v(-roomHalfW, ceilingY, back), v(roomHalfW, ceilingY, back), white, uvScale = 1.4f, uvPlane = UV_XY)
+        plain.quadEmit(v(0.35f, PROJ_Y - 0.2f, back - 0.02f), v(-0.35f, PROJ_Y - 0.2f, back - 0.02f),
+            v(-0.35f, PROJ_Y + 0.2f, back - 0.02f), v(0.35f, PROJ_Y + 0.2f, back - 0.02f), floatArrayOf(0.9f, 0.9f, 1.0f))
+        plain.quadFlat(v(-roomHalfW, ceilingY, front), v(-roomHalfW, ceilingY, back), v(roomHalfW, ceilingY, back), v(roomHalfW, ceilingY, front), floatArrayOf(0.02f, 0.02f, 0.025f))
         val rnd = java.util.Random(7)
-        repeat(140) {
+        repeat(160) {
             val sx = (rnd.nextFloat() * 2f - 1f) * (roomHalfW - 0.3f)
             val sz = front + rnd.nextFloat() * (back - front)
-            val s = 0.015f + rnd.nextFloat() * 0.02f
-            val b = 0.5f + rnd.nextFloat() * 0.5f
-            m.quadEmit(v(sx - s, ceilingY - 0.01f, sz + s), v(sx + s, ceilingY - 0.01f, sz + s),
+            val s = 0.012f + rnd.nextFloat() * 0.016f
+            val b = 0.35f + rnd.nextFloat() * 0.45f
+            plain.quadEmit(v(sx - s, ceilingY - 0.01f, sz + s), v(sx + s, ceilingY - 0.01f, sz + s),
                 v(sx + s, ceilingY - 0.01f, sz - s), v(sx - s, ceilingY - 0.01f, sz - s), floatArrayOf(b, b * 0.9f, b * 0.75f))
         }
-        // Schwarzer Rahmen hinter der Leinwand
         val fz = -SCREEN_DIST - 0.05f
-        m.quadEmit(v(-sHalfW - 0.25f, -sHalfH - 0.25f, fz), v(sHalfW + 0.25f, -sHalfH - 0.25f, fz),
+        plain.quadEmit(v(-sHalfW - 0.25f, -sHalfH - 0.25f, fz), v(sHalfW + 0.25f, -sHalfH - 0.25f, fz),
             v(sHalfW + 0.25f, sHalfH + 0.25f, fz), v(-sHalfW - 0.25f, sHalfH + 0.25f, fz), floatArrayOf(0f, 0f, 0f))
-        m.twoSidedDefault = false
     }
 
-    private fun buildSeats(m: Mesh) {
-        val rnd = java.util.Random(42)
-        val velvet = floatArrayOf(0.48f, 0.06f, 0.09f)
-        val arm = floatArrayOf(0.09f, 0.09f, 0.1f)
-        val hairs = listOf(
-            floatArrayOf(0.12f, 0.08f, 0.05f), floatArrayOf(0.05f, 0.04f, 0.04f),
-            floatArrayOf(0.45f, 0.35f, 0.18f), floatArrayOf(0.4f, 0.4f, 0.4f), floatArrayOf(0.25f, 0.1f, 0.05f),
-        )
-        val screenAngH = Math.toDegrees(kotlin.math.atan(sHalfW / SCREEN_DIST).toDouble()).toFloat()
-        val screenAngV = Math.toDegrees(kotlin.math.atan(sHalfH / SCREEN_DIST).toDouble()).toFloat()
+    private fun buildSeats(plain: Mesh, seat: Mesh) {
+        val velvet = floatArrayOf(1.5f, 1.5f, 1.5f) // Farbe kommt aus der Textur
+        val velvetPlain = floatArrayOf(0.36f, 0.05f, 0.07f)
+        val arm = floatArrayOf(0.07f, 0.07f, 0.08f)
         for (k in FRONT_ROWS..BACK_ROWS) {
             val zc = rowZ(k)
             val fy = floorY(zc)
-            var j = -30
-            while (j <= 30) {
+            for (j in -30..30) {
                 val x = seatX(k, j)
-                if (abs(x) > roomHalfW - 0.9f) {
-                    j++
-                    continue
+                if (!seatVisible(x)) continue
+                // Rückenlehne: gerundet, gepolstert, leicht nach hinten geneigt
+                seat.roundedSlab(
+                    cx = x, y0 = fy + 0.40f, zFront = zc + BACK_Z0, w = 0.54f, h = BACK_TOP - 0.40f, depth = BACK_Z1 - BACK_Z0,
+                    rTop = 0.15f, rBottom = 0.05f, tiltDeg = 9f, color = velvet, textured = true,
+                )
+                // Sitzfläche
+                if (!(k == 0 && j == 0)) {
+                    plain.roundedBox(x - 0.25f, x + 0.25f, fy + 0.36f, fy + 0.48f, zc - 0.26f, zc + BACK_Z0 + 0.02f, 0.04f, velvetPlain)
                 }
-                // Lehne, Sitzfläche, Armlehne rechts
-                m.box(x - 0.26f, x + 0.26f, fy + 0.42f, fy + BACK_TOP, zc + BACK_Z0, zc + BACK_Z1, velvet)
-                if (!(k == 0 && j == 0)) m.box(x - 0.25f, x + 0.25f, fy + 0.40f, fy + 0.48f, zc - 0.25f, zc + BACK_Z0, velvet)
-                if (!(k == 0 && (j == 0 || j == -1))) m.box(x + 0.28f, x + 0.34f, fy + 0.58f, fy + 0.64f, zc - 0.28f, zc + 0.22f, arm)
-                // Publikum: Köpfe und Schultern, aber nichts, was die Leinwand verdeckt
-                val occupied = k != 0 && rnd.nextFloat() < 0.5f
-                val easter = (k == -3 && j == -3) || (k == -5 && j == 4)
-                if (occupied && !easter) {
-                    val hy = fy + 1.17f
-                    val hz = zc + 0.1f
-                    val az = Math.toDegrees(atan2(x.toDouble(), (-hz).toDouble())).toFloat()
-                    val el = Math.toDegrees(atan2(hy.toDouble(), sqrt((x * x + hz * hz).toDouble()))).toFloat()
-                    val angR = Math.toDegrees(atan2(0.16, sqrt((x * x + hz * hz).toDouble()))).toFloat()
-                    val blocksScreen = k < 0 && abs(az) < screenAngH + angR && el > -screenAngV - angR
-                    if (!blocksScreen) {
-                        val shirt = floatArrayOf(0.1f + rnd.nextFloat() * 0.25f, 0.1f + rnd.nextFloat() * 0.2f, 0.1f + rnd.nextFloat() * 0.25f)
-                        m.box(x - 0.2f, x + 0.2f, fy + 0.95f, fy + 1.08f, zc + 0.02f, zc + 0.2f, shirt)
-                        m.sphere(x, hy, hz, 0.1f, 0.12f, hairs[rnd.nextInt(hairs.size)])
-                    }
+                // Armlehne rechts (beim eigenen Sitz eigene Armlehnen)
+                if (!(k == 0 && (j == 0 || j == -1))) {
+                    plain.roundedSlab(
+                        cx = x + SEAT_W / 2f, y0 = fy + 0.56f, zFront = zc - 0.28f, w = 0.07f, h = 0.07f, depth = 0.52f,
+                        rTop = 0.03f, rBottom = 0.03f, tiltDeg = 0f, color = arm, textured = false, segs = 3,
+                    )
                 }
-                j++
             }
+        }
+    }
+
+    /** Star-Wars-Zuschauer als Bilder, die sich zum Betrachter drehen. Keiner verdeckt die Leinwand. */
+    private fun buildAudience(m: Mesh) {
+        val rnd = java.util.Random(42)
+        val angH = Math.toDegrees(atan(sHalfW / SCREEN_DIST).toDouble()).toFloat()
+        val angV = Math.toDegrees(atan(sHalfH / SCREEN_DIST).toDouble()).toFloat()
+        data class S(val x: Float, val y: Float, val z: Float, val cell: Int)
+        val list = mutableListOf<S>()
+        for (k in FRONT_ROWS..BACK_ROWS) {
+            if (k == 0) continue
+            val zc = rowZ(k)
+            val fy = floorY(zc)
+            for (j in -30..30) {
+                val x = seatX(k, j)
+                if (!seatVisible(x) || (k == -3 && j == -3)) continue
+                if (rnd.nextFloat() > 0.45f) continue
+                val cell = rnd.nextInt(AUDIENCE_CELLS)
+                val z = zc + 0.12f
+                val y = fy + 0.80f
+                if (k < 0) {
+                    val top = y + SPRITE_H
+                    val dist = sqrt(x * x + z * z)
+                    val az = Math.toDegrees(atan2(x.toDouble(), (-z).toDouble())).toFloat()
+                    val el = Math.toDegrees(atan2(top.toDouble(), dist.toDouble())).toFloat()
+                    val halfAng = Math.toDegrees(atan2(SPRITE_W / 2.0, dist.toDouble())).toFloat()
+                    if (abs(az) < angH + halfAng && el > -angV) continue
+                }
+                list.add(S(x, y, z, cell))
+            }
+        }
+        // Von hinten nach vorn zeichnen
+        list.sortByDescending { it.x * it.x + it.z * it.z }
+        for (s in list) {
+            val len = sqrt(s.x * s.x + s.z * s.z).coerceAtLeast(0.01f)
+            val fx = s.x / len
+            val fz = s.z / len
+            // Rechts aus Sicht des Betrachters
+            val rx = -fz
+            val rz = fx
+            val hw = SPRITE_W / 2f
+            val u0 = s.cell.toFloat() / AUDIENCE_CELLS + 0.002f
+            val u1 = (s.cell + 1).toFloat() / AUDIENCE_CELLS - 0.002f
+            val c = floatArrayOf(1f, 1f, 1f, 1f)
+            m.vert(s.x - rx * hw, s.y + SPRITE_H, s.z - rz * hw, u0, 0f, c)
+            m.vert(s.x - rx * hw, s.y, s.z - rz * hw, u0, 1f, c)
+            m.vert(s.x + rx * hw, s.y + SPRITE_H, s.z + rz * hw, u1, 0f, c)
+            m.vert(s.x + rx * hw, s.y + SPRITE_H, s.z + rz * hw, u1, 0f, c)
+            m.vert(s.x - rx * hw, s.y, s.z - rz * hw, u0, 1f, c)
+            m.vert(s.x + rx * hw, s.y, s.z + rz * hw, u1, 1f, c)
         }
     }
 
     /** Eigene Beine, Armlehnen, Popcorn auf dem Schoß, Getränk rechts im Becherhalter. */
     private fun buildSelf(m: Mesh) {
-        val jeans = floatArrayOf(0.13f, 0.18f, 0.32f)
-        val shoe = floatArrayOf(0.06f, 0.06f, 0.07f)
+        val jeans = floatArrayOf(0.16f, 0.22f, 0.38f)
+        val shoe = floatArrayOf(0.07f, 0.07f, 0.08f)
         val shirt = floatArrayOf(0.1f, 0.1f, 0.11f)
-        val arm = floatArrayOf(0.12f, 0.12f, 0.13f)
-        // Bauch und Brust (beim Blick ganz nach unten)
-        m.box(-0.17f, 0.17f, -0.62f, -0.2f, 0.02f, 0.16f, shirt)
+        val arm = floatArrayOf(0.1f, 0.1f, 0.11f)
+        m.roundedBox(-0.18f, 0.18f, -0.62f, -0.2f, 0.02f, 0.18f, 0.06f, shirt)
         for (s in listOf(-1f, 1f)) {
-            val x0 = if (s < 0) -0.19f else 0.03f
-            val x1 = if (s < 0) -0.03f else 0.19f
-            m.box(x0, x1, -0.64f, -0.49f, -0.5f, 0.06f, jeans) // Oberschenkel
-            m.box(x0 + 0.01f, x1 - 0.01f, -1.12f, -0.52f, -0.56f, -0.42f, jeans) // Unterschenkel
-            m.box(x0, x1, -1.2f, -1.11f, -0.72f, -0.4f, shoe) // Schuh
+            val lx = s * 0.105f
+            // Oberschenkel von der Hüfte zum Knie, Unterschenkel nach unten
+            m.tube(v(lx, -0.56f, 0.06f), v(lx, -0.55f, -0.48f), 0.085f, 0.075f, 0.065f, 0.06f, jeans) { jeans }
+            m.sphere(lx, -0.555f, -0.48f, 0.068f, 0.064f, jeans)
+            m.tube(v(lx, -0.55f, -0.48f), v(lx, -1.08f, -0.46f), 0.06f, 0.06f, 0.05f, 0.05f, jeans) { jeans }
+            // Schuh
+            m.roundedBox(lx - 0.055f, lx + 0.055f, -1.2f, -1.1f, -0.70f, -0.40f, 0.04f, shoe)
             // Armlehnen des eigenen Sitzes
-            val ax = s * 0.31f
-            m.box(ax - 0.04f, ax + 0.04f, -0.66f, -0.58f, -0.4f, 0.12f, arm)
-        }
-        // Popcorn: gestreifter Eimer auf dem Schoß, Körner obendrauf
-        val bx = 0f
-        val bz = -0.28f
-        val by = -0.49f
-        val segs = 18
-        val h = 0.2f
-        for (i in 0 until segs) {
-            val a0 = 2 * PI.toFloat() * i / segs
-            val a1 = 2 * PI.toFloat() * (i + 1) / segs
-            val r0 = 0.075f
-            val r1 = 0.105f
-            val col = if (i % 2 == 0) floatArrayOf(0.85f, 0.1f, 0.1f) else floatArrayOf(0.95f, 0.93f, 0.88f)
-            m.quadLit(
-                v(bx + r0 * cos(a0), by, bz + r0 * sin(a0)), v(bx + r0 * cos(a1), by, bz + r0 * sin(a1)),
-                v(bx + r1 * cos(a1), by + h, bz + r1 * sin(a1)), v(bx + r1 * cos(a0), by + h, bz + r1 * sin(a0)), col,
-                twoSided = true,
+            m.roundedSlab(
+                cx = s * 0.31f, y0 = -0.66f, zFront = -0.42f, w = 0.08f, h = 0.08f, depth = 0.56f,
+                rTop = 0.035f, rBottom = 0.035f, tiltDeg = 0f, color = arm, textured = false, segs = 3,
             )
         }
+        // Popcorn: gestreifter Eimer, Körner obendrauf
+        val by = -0.49f
+        val bz = -0.28f
+        val h = 0.2f
+        m.tube(v(0f, by, bz), v(0f, by + h, bz), 0.075f, 0.075f, 0.105f, 0.105f, floatArrayOf(1f, 1f, 1f), segs = 24) { i ->
+            if ((i / 2) % 2 == 0) floatArrayOf(0.8f, 0.08f, 0.08f) else floatArrayOf(0.95f, 0.92f, 0.86f)
+        }
         val rnd = java.util.Random(3)
-        repeat(110) {
+        repeat(130) {
             val a = rnd.nextFloat() * 2f * PI.toFloat()
             val r = sqrt(rnd.nextFloat()) * 0.095f
             val dome = 0.05f * (1f - (r / 0.1f) * (r / 0.1f))
             val y = by + h + dome + rnd.nextFloat() * 0.02f
-            val tint = 0.85f + rnd.nextFloat() * 0.15f
-            m.sphere(bx + r * cos(a), y, bz + r * sin(a), 0.017f, 0.015f, floatArrayOf(tint, tint * 0.9f, tint * 0.62f), lat = 3, lon = 5)
+            val t = 0.85f + rnd.nextFloat() * 0.15f
+            m.sphere(r * cos(a), y, bz + r * sin(a), 0.017f, 0.015f, floatArrayOf(t, t * 0.9f, t * 0.62f), lat = 4, lon = 6)
         }
-        // Getränk: Becher mit Deckel und Strohhalm
+        // Becher mit Deckel und Strohhalm
         val cx = 0.31f
         val cz = -0.28f
         val cy = -0.58f
         val ch = 0.19f
-        for (i in 0 until segs) {
-            val a0 = 2 * PI.toFloat() * i / segs
-            val a1 = 2 * PI.toFloat() * (i + 1) / segs
-            val r0 = 0.038f
-            val r1 = 0.046f
-            for (band in 0..2) {
-                val y0 = cy + ch * band / 3f
-                val y1 = cy + ch * (band + 1) / 3f
-                val rr0 = r0 + (r1 - r0) * band / 3f
-                val rr1 = r0 + (r1 - r0) * (band + 1) / 3f
-                val col = if (band == 1) floatArrayOf(0.95f, 0.95f, 0.95f) else floatArrayOf(0.7f, 0.06f, 0.08f)
-                m.quadLit(
-                    v(cx + rr0 * cos(a0), y0, cz + rr0 * sin(a0)), v(cx + rr0 * cos(a1), y0, cz + rr0 * sin(a1)),
-                    v(cx + rr1 * cos(a1), y1, cz + rr1 * sin(a1)), v(cx + rr1 * cos(a0), y1, cz + rr1 * sin(a0)), col,
-                    twoSided = true,
-                )
-            }
-            // Deckel
-            m.triLit(v(cx, cy + ch + 0.006f, cz), v(cx + r1 * cos(a1), cy + ch, cz + r1 * sin(a1)),
-                v(cx + r1 * cos(a0), cy + ch, cz + r1 * sin(a0)), floatArrayOf(0.92f, 0.92f, 0.92f))
+        m.tube(v(cx, cy, cz), v(cx, cy + ch, cz), 0.038f, 0.038f, 0.046f, 0.046f, floatArrayOf(1f, 1f, 1f), segs = 20, bands = 3) { band ->
+            if (band == 1) floatArrayOf(0.92f, 0.92f, 0.92f) else floatArrayOf(0.62f, 0.05f, 0.07f)
         }
-        m.box(cx - 0.005f, cx + 0.005f, cy + ch, cy + ch + 0.1f, cz - 0.005f, cz + 0.005f, floatArrayOf(0.9f, 0.2f, 0.2f))
+        m.sphere(cx, cy + ch, cz, 0.047f, 0.012f, floatArrayOf(0.9f, 0.9f, 0.9f))
+        m.tube(v(cx, cy + ch, cz), v(cx + 0.015f, cy + ch + 0.11f, cz), 0.005f, 0.005f, 0.005f, 0.005f, floatArrayOf(0.85f, 0.2f, 0.2f), segs = 6) {
+            floatArrayOf(0.85f, 0.2f, 0.2f)
+        }
     }
 
-    /** Zwei Vorhänge, die sich zur Seite öffnen, und ein Volant oben. */
     private fun buildCurtains(m: Mesh, open: Float) {
-        val red = floatArrayOf(0.55f, 0.04f, 0.07f)
+        val white = floatArrayOf(0.9f, 0.9f, 0.9f)
         val bottom = frontFloorY
         val top = ceilingY - 0.2f
         val outer = roomHalfW - 0.2f
@@ -408,252 +449,382 @@ class CinemaScene {
         for (side in listOf(-1f, 1f)) {
             val x0 = side * inner
             val x1 = side * outer
-            val n = 70
+            val n = 80
+            val folds = 18f + 14f * open
             for (i in 0 until n) {
                 val t0 = i.toFloat() / n
                 val t1 = (i + 1).toFloat() / n
                 val xa = x0 + (x1 - x0) * t0
                 val xb = x0 + (x1 - x0) * t1
-                // Falten: gerafft, je weiter offen, desto enger
-                val folds = 18f + 14f * open
                 val za = curtainZ + 0.1f * sin(t0 * folds * PI.toFloat())
                 val zb = curtainZ + 0.1f * sin(t1 * folds * PI.toFloat())
-                val shade = 0.55f + 0.45f * cos((t0 + t1) / 2f * folds * PI.toFloat())
-                val col = floatArrayOf(red[0] * shade, red[1] * shade, red[2] * shade)
-                m.quadLit(v(xa, bottom, za), v(xb, bottom, zb), v(xb, top, zb), v(xa, top, za), col, twoSided = true)
+                // Ecken-Normalen aus der Faltenneigung, Textur zieht mit dem Stoff
+                val na = foldNormal(t0, folds, x1 - x0)
+                val nb = foldNormal(t1, folds, x1 - x0)
+                val ua = t0 * folds / 2f
+                val ub = t1 * folds / 2f
+                m.quadSmooth(
+                    v(xa, bottom, za), v(xb, bottom, zb), v(xb, top, zb), v(xa, top, za),
+                    na, nb, nb, na, white,
+                    floatArrayOf(ua, 1f, ub, 1f, ub, 0f, ua, 0f),
+                )
             }
         }
-        // Volant über der Leinwand
         val vy0 = sHalfH + 0.35f
-        val n = 90
+        val n = 100
         for (i in 0 until n) {
             val t0 = i.toFloat() / n
             val t1 = (i + 1).toFloat() / n
             val xa = -roomHalfW + 2 * roomHalfW * t0
             val xb = -roomHalfW + 2 * roomHalfW * t1
-            val za = curtainZ + 0.18f + 0.06f * sin(t0 * 60f * PI.toFloat())
-            val zb = curtainZ + 0.18f + 0.06f * sin(t1 * 60f * PI.toFloat())
-            val shade = 0.5f + 0.4f * cos((t0 + t1) / 2f * 60f * PI.toFloat())
-            m.quadLit(v(xa, vy0, za), v(xb, vy0, zb), v(xb, ceilingY, zb), v(xa, ceilingY, za),
-                floatArrayOf(0.42f * shade, 0.03f * shade, 0.05f * shade), twoSided = true)
+            val za = curtainZ + 0.18f + 0.05f * sin(t0 * 70f * PI.toFloat())
+            val zb = curtainZ + 0.18f + 0.05f * sin(t1 * 70f * PI.toFloat())
+            val na = foldNormal(t0, 70f, 2 * roomHalfW)
+            val nb = foldNormal(t1, 70f, 2 * roomHalfW)
+            m.quadSmooth(
+                v(xa, vy0, za), v(xb, vy0, zb), v(xb, ceilingY, zb), v(xa, ceilingY, za),
+                na, nb, nb, na, floatArrayOf(0.7f, 0.7f, 0.7f),
+                floatArrayOf(t0 * 35f, 0.6f, t1 * 35f, 0.6f, t1 * 35f, 0f, t0 * 35f, 0f),
+            )
         }
     }
 
-    /** Schwacher Lichtkegel vom Projektor zur Leinwand. */
+    private fun foldNormal(t: Float, folds: Float, width: Float): V {
+        val slope = 0.1f * folds * PI.toFloat() * cos(t * folds * PI.toFloat()) / abs(width).coerceAtLeast(0.1f)
+        val l = sqrt(1f + slope * slope)
+        return v(-slope / l * (if (width < 0) -1f else 1f), 0f, 1f / l)
+    }
+
     private fun buildBeam(m: Mesh, open: Float) {
         val back = rowZ(BACK_ROWS) + 1.0f
-        val a = 0.035f * open
+        val a = 0.06f * open
         if (a <= 0f) return
         val p = v(0f, PROJ_Y, back - 0.05f)
-        val c = floatArrayOf(0.8f, 0.85f, 1f, a)
+        val c0 = floatArrayOf(0.8f, 0.85f, 1f, a)
+        val c1 = floatArrayOf(0.8f, 0.85f, 1f, 0f)
         val corners = listOf(
             v(-sHalfW, -sHalfH, -SCREEN_DIST), v(sHalfW, -sHalfH, -SCREEN_DIST),
             v(sHalfW, sHalfH, -SCREEN_DIST), v(-sHalfW, sHalfH, -SCREEN_DIST),
         )
-        for (i in 0 until 4) m.triRaw(p, corners[i], corners[(i + 1) % 4], c, floatArrayOf(c[0], c[1], c[2], 0f))
-    }
-
-    // ---- Sprites ----
-
-    private fun ensureSprites() {
-        if (spriteLeft == null) {
-            spriteLeft = Sprite(CinemaArt.personSide(CinemaArt.LOOK_LEFT, false))
-            spriteLeftTurned = Sprite(CinemaArt.personSide(CinemaArt.LOOK_LEFT, true))
-            spriteRight = Sprite(CinemaArt.personSide(CinemaArt.LOOK_RIGHT, false))
-            spriteCat = Sprite(CinemaArt.cat())
-            spriteAlien = Sprite(CinemaArt.alien())
-            spriteExit = Sprite(CinemaArt.exitSign())
+        for (i in 0 until 4) {
+            m.vert(p.x, p.y, p.z, 0.5f, 0.5f, c0)
+            m.vert(corners[i].x, corners[i].y, corners[i].z, 0.5f, 0.5f, c1)
+            m.vert(corners[(i + 1) % 4].x, corners[(i + 1) % 4].y, corners[(i + 1) % 4].z, 0.5f, 0.5f, c1)
         }
     }
 
-    private fun bind(s: Sprite) {
-        if (s.texture == 0) s.texture = GlUtil.textureFromBitmap(s.bitmap)
+    // ---- Einzelne Bilder ----
+
+    private val quadBuf = ByteBuffer.allocateDirect(4 * 9 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+
+    private fun quad(tex: Int, data: FloatArray) {
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
-        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, s.texture)
-    }
-
-    /** Nachbar als senkrechte Fläche bei x, Bild von vorn (Leinwand) nach hinten. */
-    private fun sideSprite(s: Sprite?, x: Float, flipU: Boolean) {
-        s ?: return
-        bind(s)
-        val z0 = CinemaArt.SIDE_Z0
-        val z1 = CinemaArt.SIDE_Z1
-        val y0 = CinemaArt.SIDE_Y0
-        val y1 = CinemaArt.SIDE_Y1
-        val u0 = if (flipU) 1f else 0f
-        val u1 = 1f - u0
-        // Reihenfolge: oben vorn, unten vorn, oben hinten, unten hinten
-        quad(
-            floatArrayOf(
-                x, y1, z0, u0, 0f,
-                x, y0, z0, u0, 1f,
-                x, y1, z1, u1, 0f,
-                x, y0, z1, u1, 1f,
-            ),
-        )
-    }
-
-    /** Fläche, die zum Betrachter (nach +z) zeigt, mit Unterkante bei y. */
-    private fun facingSprite(s: Sprite, x: Float, yBottom: Float, z: Float, w: Float, h: Float) {
-        bind(s)
-        quad(
-            floatArrayOf(
-                x - w / 2, yBottom + h, z, 0f, 0f,
-                x - w / 2, yBottom, z, 0f, 1f,
-                x + w / 2, yBottom + h, z, 1f, 0f,
-                x + w / 2, yBottom, z, 1f, 1f,
-            ),
-        )
-    }
-
-    /** Schild an der linken Wand, zeigt nach rechts in den Saal. */
-    private fun wallSprite(s: Sprite, x: Float, yc: Float, zc: Float, w: Float, h: Float) {
-        bind(s)
-        quad(
-            floatArrayOf(
-                x, yc + h / 2, zc - w / 2, 0f, 0f,
-                x, yc - h / 2, zc - w / 2, 0f, 1f,
-                x, yc + h / 2, zc + w / 2, 1f, 0f,
-                x, yc - h / 2, zc + w / 2, 1f, 1f,
-            ),
-        )
-    }
-
-    private val quadBuf: FloatBuffer = ByteBuffer.allocateDirect(20 * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-
-    private fun quad(data: FloatArray) {
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
         quadBuf.position(0)
         quadBuf.put(data).position(0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, spriteVbo)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, 20 * 4, quadBuf, GLES30.GL_DYNAMIC_DRAW)
-        GLES30.glEnableVertexAttribArray(0)
-        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 20, 0)
-        GLES30.glEnableVertexAttribArray(1)
-        GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, 20, 12)
-        GLES30.glDisableVertexAttribArray(2)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, quadBuf, GLES30.GL_DYNAMIC_DRAW)
+        attribs()
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
     }
 
-    // ---- Zeichnen der Farbgeometrie ----
-
-    private fun useColor(mvp: FloatArray, bright: Float) {
-        GLES30.glUseProgram(colorProgram)
-        GLES30.glUniformMatrix4fv(GLES30.glGetUniformLocation(colorProgram, "uMvp"), 1, false, mvp, 0)
-        GLES30.glUniform1f(GLES30.glGetUniformLocation(colorProgram, "uBright"), bright)
+    private fun sideSprite(tex: Int, x: Float, flipU: Boolean) {
+        val z0 = SIDE_Z0
+        val z1 = SIDE_Z1
+        val y0 = SIDE_Y0
+        val y1 = SIDE_Y1
+        val u0 = if (flipU) 1f else 0f
+        val u1 = 1f - u0
+        quad(
+            tex,
+            floatArrayOf(
+                x, y1, z0, u0, 0f, 1f, 1f, 1f, 1f,
+                x, y0, z0, u0, 1f, 1f, 1f, 1f, 1f,
+                x, y1, z1, u1, 0f, 1f, 1f, 1f, 1f,
+                x, y0, z1, u1, 1f, 1f, 1f, 1f, 1f,
+            ),
+        )
     }
 
-    private fun drawColored(vbo: Int, count: Int, first: Int = 0) {
-        if (count == 0) return
-        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
+    private fun facing(tex: Int, x: Float, yBottom: Float, z: Float, w: Float, h: Float) {
+        quad(
+            tex,
+            floatArrayOf(
+                x - w / 2, yBottom + h, z, 0f, 0f, 1f, 1f, 1f, 1f,
+                x - w / 2, yBottom, z, 0f, 1f, 1f, 1f, 1f, 1f,
+                x + w / 2, yBottom + h, z, 1f, 0f, 1f, 1f, 1f, 1f,
+                x + w / 2, yBottom, z, 1f, 1f, 1f, 1f, 1f, 1f,
+            ),
+        )
+    }
+
+    private fun wallSprite(tex: Int, x: Float, yc: Float, zc: Float, w: Float, h: Float) {
+        quad(
+            tex,
+            floatArrayOf(
+                x, yc + h / 2, zc - w / 2, 0f, 0f, 1f, 1f, 1f, 1f,
+                x, yc - h / 2, zc - w / 2, 0f, 1f, 1f, 1f, 1f, 1f,
+                x, yc + h / 2, zc + w / 2, 1f, 0f, 1f, 1f, 1f, 1f,
+                x, yc - h / 2, zc + w / 2, 1f, 1f, 1f, 1f, 1f, 1f,
+            ),
+        )
+    }
+
+    // ---- GL ----
+
+    private fun attribs() {
         GLES30.glEnableVertexAttribArray(0)
         GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, STRIDE, 0)
-        GLES30.glDisableVertexAttribArray(1)
+        GLES30.glEnableVertexAttribArray(1)
+        GLES30.glVertexAttribPointer(1, 2, GLES30.GL_FLOAT, false, STRIDE, 12)
         GLES30.glEnableVertexAttribArray(2)
-        GLES30.glVertexAttribPointer(2, 4, GLES30.GL_FLOAT, false, STRIDE, 12)
-        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, first, count)
+        GLES30.glVertexAttribPointer(2, 4, GLES30.GL_FLOAT, false, STRIDE, 20)
+    }
+
+    private fun drawMesh(vbo: Int, count: Int, tex: Int) {
+        if (count == 0) return
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
+        attribs()
+        GLES30.glDrawArrays(GLES30.GL_TRIANGLES, 0, count)
         GLES30.glDisableVertexAttribArray(2)
     }
 
-    private fun upload(vbo: Int, m: Mesh) {
+    private fun upload(vbo: Int, m: Mesh): Int {
         val buf = ByteBuffer.allocateDirect(max(1, m.size) * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
         buf.put(m.data, 0, m.size).position(0)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, vbo)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, m.size * 4, buf, GLES30.GL_DYNAMIC_DRAW)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, m.size * 4, buf, GLES30.GL_STATIC_DRAW)
+        return m.size / 9
     }
 
-    // ---- Geometrie mit Licht von der Leinwand ----
+    // ---- Geometrie ----
 
     private class V(val x: Float, val y: Float, val z: Float)
 
     private fun v(x: Float, y: Float, z: Float) = V(x, y, z)
 
-    /** Dreiecke mit Position und Farbe (RGBA) je Ecke. */
+    /** Dreiecke mit Position, Texturkoordinate und Farbe je Ecke (Licht eingerechnet). */
     private inner class Mesh {
         var data = FloatArray(1 shl 16)
         var size = 0
-        /** Für Wände, Boden und Decke: Licht von beiden Seiten. */
-        var twoSidedDefault = false
-        val count get() = size / 7
 
-        private fun put(p: V, c: FloatArray) {
-            if (size + 7 > data.size) data = data.copyOf(data.size * 2)
-            data[size++] = p.x; data[size++] = p.y; data[size++] = p.z
+        fun vert(x: Float, y: Float, z: Float, u: Float, vv: Float, c: FloatArray) {
+            if (size + 9 > data.size) data = data.copyOf(data.size * 2)
+            data[size++] = x; data[size++] = y; data[size++] = z
+            data[size++] = u; data[size++] = vv
             data[size++] = c[0]; data[size++] = c[1]; data[size++] = c[2]; data[size++] = if (c.size > 3) c[3] else 1f
         }
 
-        fun triRaw(a: V, b: V, c: V, ca: FloatArray, cbc: FloatArray) {
-            put(a, ca); put(b, cbc); put(c, cbc)
+        private fun lit(p: V, n: V, base: FloatArray, u: Float, vv: Float) {
+            vert(p.x, p.y, p.z, u, vv, light(p, n, base))
         }
 
-        /** Selbstleuchtend: Farbe unverändert. */
+        /** Selbstleuchtend. */
         fun quadEmit(a: V, b: V, c: V, d: V, col: FloatArray) {
-            put(a, col); put(b, col); put(c, col)
-            put(a, col); put(c, col); put(d, col)
+            for (p in listOf(a, b, c, a, c, d)) vert(p.x, p.y, p.z, 0.5f, 0.5f, col)
         }
 
-        fun triLit(a: V, b: V, c: V, base: FloatArray, twoSided: Boolean = false) {
-            val col = light(a, b, c, base, twoSided)
-            put(a, col); put(b, col); put(c, col)
+        /** Flaches Viereck, beidseitig beleuchtet, Textur in Metern ([uvScale] m je Kachel). */
+        fun quadFlat(a: V, b: V, c: V, d: V, base: FloatArray, uvScale: Float = 0f, uvPlane: Int = UV_XY) {
+            val n0 = normal(a, b, c)
+            fun uv(p: V): Pair<Float, Float> {
+                if (uvScale <= 0f) return 0.5f to 0.5f
+                return when (uvPlane) {
+                    UV_XZ -> p.x / uvScale to p.z / uvScale
+                    UV_ZY -> p.z / uvScale to -p.y / uvScale
+                    else -> p.x / uvScale to -p.y / uvScale
+                }
+            }
+            for (p in listOf(a, b, c, a, c, d)) {
+                val (u, vv) = uv(p)
+                vert(p.x, p.y, p.z, u, vv, light(p, n0, base, twoSided = true))
+            }
         }
 
-        /** Viereck a, b, c, d (gegen den Uhrzeigersinn von vorn gesehen), flach beleuchtet. */
-        fun quadLit(a: V, b: V, c: V, d: V, base: FloatArray, twoSided: Boolean = false) {
-            val col = light(a, b, c, base, twoSided)
-            put(a, col); put(b, col); put(c, col)
-            put(a, col); put(c, col); put(d, col)
+        /** Viereck mit Normalen je Ecke (weich), uv als u0,v0,...u3,v3. */
+        fun quadSmooth(a: V, b: V, c: V, d: V, na: V, nb: V, nc: V, nd: V, base: FloatArray, uv: FloatArray) {
+            lit(a, na, base, uv[0], uv[1]); lit(b, nb, base, uv[2], uv[3]); lit(c, nc, base, uv[4], uv[5])
+            lit(a, na, base, uv[0], uv[1]); lit(c, nc, base, uv[4], uv[5]); lit(d, nd, base, uv[6], uv[7])
         }
 
-        /** Quader ohne Unterseite. */
-        fun box(x0: Float, x1: Float, y0: Float, y1: Float, z0: Float, z1: Float, base: FloatArray) {
-            quadLit(v(x0, y0, z1), v(x1, y0, z1), v(x1, y1, z1), v(x0, y1, z1), base) // hinten (+z)
-            quadLit(v(x1, y0, z0), v(x0, y0, z0), v(x0, y1, z0), v(x1, y1, z0), base) // vorn (-z)
-            quadLit(v(x0, y1, z1), v(x1, y1, z1), v(x1, y1, z0), v(x0, y1, z0), base) // oben
-            quadLit(v(x0, y0, z0), v(x0, y0, z1), v(x0, y1, z1), v(x0, y1, z0), base) // links
-            quadLit(v(x1, y0, z1), v(x1, y0, z0), v(x1, y1, z0), v(x1, y1, z1), base) // rechts
+        /**
+         * Gerundete Platte (Rückenlehne, Armlehne): Umriss mit runden Ecken in der x-y-Ebene,
+         * nach hinten ([depth]) ausgezogen, Kante hinten abgerundet, um [tiltDeg] nach hinten geneigt.
+         */
+        fun roundedSlab(
+            cx: Float, y0: Float, zFront: Float, w: Float, h: Float, depth: Float,
+            rTop: Float, rBottom: Float, tiltDeg: Float, color: FloatArray, textured: Boolean, segs: Int = 5,
+        ) {
+            val outline = roundedOutline(w, h, rTop, rBottom, segs)
+            val tilt = Math.toRadians(tiltDeg.toDouble()).toFloat()
+            val ct = cos(tilt)
+            val st = sin(tilt)
+            val bevel = min(0.025f, min(w, h) * 0.3f)
+            fun pt(ox: Float, oy: Float, d: Float): V = v(cx + ox, y0 + oy * ct - d * st, zFront + oy * st + d * ct)
+            fun dir(nx: Float, ny: Float, nz: Float): V {
+                val y = ny * ct - nz * st
+                val z = ny * st + nz * ct
+                val l = sqrt(nx * nx + y * y + z * z)
+                return v(nx / l, y / l, z / l)
+            }
+            val n = outline.size
+            val inset = outline.map { (x, y, nx, ny) -> floatArrayOf(x - nx * bevel, y - ny * bevel, nx, ny) }
+            fun uvOf(p: FloatArray) = floatArrayOf(if (textured) p[0] / w + 0.5f else 0.5f, if (textured) 1f - p[1] / h else 0.5f)
+            for (i in 0 until n) {
+                val p = outline[i]
+                val q = outline[(i + 1) % n]
+                val pi = inset[i]
+                val qi = inset[(i + 1) % n]
+                // Seitenwand
+                val np = dir(p[2], p[3], 0f)
+                val nq = dir(q[2], q[3], 0f)
+                quadSmooth(
+                    pt(p[0], p[1], 0f), pt(q[0], q[1], 0f), pt(q[0], q[1], depth - bevel), pt(p[0], p[1], depth - bevel),
+                    np, nq, nq, np, color, uvOf(p) + uvOf(q) + uvOf(q) + uvOf(p),
+                )
+                // Abgerundete Kante hinten
+                val bp = dir(p[2] * 0.6f, p[3] * 0.6f, 0.8f)
+                val bq = dir(q[2] * 0.6f, q[3] * 0.6f, 0.8f)
+                val back = dir(0f, 0f, 1f)
+                quadSmooth(
+                    pt(p[0], p[1], depth - bevel), pt(q[0], q[1], depth - bevel), pt(qi[0], qi[1], depth), pt(pi[0], pi[1], depth),
+                    bp, bq, back, back, color, uvOf(p) + uvOf(q) + uvOf(qi) + uvOf(pi),
+                )
+                // Rückseite (zum Betrachter) als Fächer, Vorderseite ebenso
+                val c0 = pt(0f, h * 0.5f, depth)
+                val ci = floatArrayOf(0f, h * 0.5f)
+                lit(c0, back, color, uvOf(ci)[0], uvOf(ci)[1])
+                lit(pt(pi[0], pi[1], depth), back, color, uvOf(pi)[0], uvOf(pi)[1])
+                lit(pt(qi[0], qi[1], depth), back, color, uvOf(qi)[0], uvOf(qi)[1])
+                val front = dir(0f, 0f, -1f)
+                lit(pt(0f, h * 0.5f, 0f), front, color, 0.5f, 0.5f)
+                lit(pt(q[0], q[1], 0f), front, color, 0.5f, 0.5f)
+                lit(pt(p[0], p[1], 0f), front, color, 0.5f, 0.5f)
+            }
         }
 
-        /** Grobe Kugel (Ellipsoid) für Köpfe und Popcorn. */
-        fun sphere(cx: Float, cy: Float, cz: Float, rx: Float, ry: Float, base: FloatArray, lat: Int = 6, lon: Int = 10) {
-            fun p(i: Int, j: Int): V {
+        /** Umriss eines Rechtecks mit runden Ecken, Punkte mit Außennormale: x, y, nx, ny. */
+        private fun roundedOutline(w: Float, h: Float, rTop: Float, rBottom: Float, segs: Int): List<FloatArray> {
+            val out = mutableListOf<FloatArray>()
+            val hw = w / 2f
+            fun corner(cx: Float, cy: Float, r: Float, a0: Float) {
+                for (s in 0..segs) {
+                    val a = a0 + (PI.toFloat() / 2f) * s / segs
+                    out.add(floatArrayOf(cx + r * cos(a), cy + r * sin(a), cos(a), sin(a)))
+                }
+            }
+            // Gegen den Uhrzeigersinn: unten rechts, oben rechts, oben links, unten links
+            corner(hw - rBottom, rBottom, rBottom, -PI.toFloat() / 2f)
+            corner(hw - rTop, h - rTop, rTop, 0f)
+            corner(-hw + rTop, h - rTop, rTop, PI.toFloat() / 2f)
+            corner(-hw + rBottom, rBottom, rBottom, PI.toFloat())
+            return out
+        }
+
+        /** Quader mit abgerundeten Kanten (einfach: Platte mit kleinem Radius). */
+        fun roundedBox(x0: Float, x1: Float, y0: Float, y1: Float, z0: Float, z1: Float, r: Float, color: FloatArray) {
+            roundedSlab(
+                cx = (x0 + x1) / 2f, y0 = y0, zFront = z0, w = x1 - x0, h = y1 - y0, depth = z1 - z0,
+                rTop = min(r, (y1 - y0) / 2f), rBottom = min(r, (y1 - y0) / 2f), tiltDeg = 0f, color = color, textured = false, segs = 3,
+            )
+        }
+
+        /**
+         * Röhre mit elliptischem Querschnitt von [p0] nach [p1] (Halbachsen in x und quer),
+         * weich schattiert. [colorOf] liefert die Farbe je Segment bzw. Band.
+         */
+        fun tube(
+            p0: V, p1: V, r0x: Float, r0y: Float, r1x: Float, r1y: Float, base: FloatArray,
+            segs: Int = 14, bands: Int = 1, colorOf: (Int) -> FloatArray,
+        ) {
+            val ax = p1.x - p0.x
+            val ay = p1.y - p0.y
+            val az = p1.z - p0.z
+            val al = sqrt(ax * ax + ay * ay + az * az)
+            val dx = ax / al
+            val dy = ay / al
+            val dz = az / al
+            // e1 = x-Achse (Röhren laufen in der y-z-Ebene), e2 = d x e1
+            val e1 = v(1f, 0f, 0f)
+            val e2 = v(dy * 0f - dz * 0f, dz * 1f - dx * 0f, dx * 0f - dy * 1f)
+            for (b in 0 until bands) {
+                val t0 = b.toFloat() / bands
+                val t1 = (b + 1).toFloat() / bands
+                for (i in 0 until segs) {
+                    val a0 = 2 * PI.toFloat() * i / segs
+                    val a1 = 2 * PI.toFloat() * (i + 1) / segs
+                    val col = if (bands > 1) colorOf(b) else colorOf(i)
+                    fun ring(t: Float, a: Float): Pair<V, V> {
+                        val rx = r0x + (r1x - r0x) * t
+                        val ry = r0y + (r1y - r0y) * t
+                        val ca = cos(a)
+                        val sa = sin(a)
+                        val px = p0.x + ax * t + e1.x * ca * rx + e2.x * sa * ry
+                        val py = p0.y + ay * t + e1.y * ca * rx + e2.y * sa * ry
+                        val pz = p0.z + az * t + e1.z * ca * rx + e2.z * sa * ry
+                        val nx = e1.x * ca / rx + e2.x * sa / ry
+                        val ny = e1.y * ca / rx + e2.y * sa / ry
+                        val nz = e1.z * ca / rx + e2.z * sa / ry
+                        val nl = sqrt(nx * nx + ny * ny + nz * nz)
+                        return v(px, py, pz) to v(nx / nl, ny / nl, nz / nl)
+                    }
+                    val (a, na) = ring(t0, a0)
+                    val (bb, nb) = ring(t0, a1)
+                    val (c, nc) = ring(t1, a1)
+                    val (d, nd) = ring(t1, a0)
+                    quadSmooth(a, bb, c, d, na, nb, nc, nd, col, floatArrayOf(0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f))
+                }
+            }
+        }
+
+        /** Kugel bzw. Ellipsoid, weich schattiert. */
+        fun sphere(cx: Float, cy: Float, cz: Float, rx: Float, ry: Float, base: FloatArray, lat: Int = 7, lon: Int = 12) {
+            fun p(i: Int, j: Int): Pair<V, V> {
                 val th = PI.toFloat() * i / lat
                 val ph = 2 * PI.toFloat() * j / lon
-                return v(cx + rx * sin(th) * cos(ph), cy + ry * cos(th), cz + rx * sin(th) * sin(ph))
+                val nx = sin(th) * cos(ph)
+                val ny = cos(th)
+                val nz = sin(th) * sin(ph)
+                return v(cx + rx * nx, cy + ry * ny, cz + rx * nz) to v(nx, ny, nz)
             }
+            val uv = floatArrayOf(0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f, 0.5f)
             for (i in 0 until lat) for (j in 0 until lon) {
-                val a = p(i, j)
-                val b = p(i + 1, j)
-                val c = p(i + 1, j + 1)
-                val d = p(i, j + 1)
-                quadLit(a, d, c, b, base)
+                val (a, na) = p(i, j)
+                val (b, nb) = p(i + 1, j)
+                val (c, nc) = p(i + 1, j + 1)
+                val (d, nd) = p(i, j + 1)
+                quadSmooth(a, d, c, b, na, nd, nc, nb, base, uv)
             }
         }
 
-        private fun light(a: V, b: V, c: V, base: FloatArray, twoSided: Boolean): FloatArray {
-            // Flächennormale
+        private fun normal(a: V, b: V, c: V): V {
             val ux = b.x - a.x; val uy = b.y - a.y; val uz = b.z - a.z
             val wx = c.x - a.x; val wy = c.y - a.y; val wz = c.z - a.z
-            var nx = uy * wz - uz * wy
-            var ny = uz * wx - ux * wz
-            var nz = ux * wy - uy * wx
-            val nl = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-6f)
-            nx /= nl; ny /= nl; nz /= nl
-            val px = (a.x + b.x + c.x) / 3f
-            val py = (a.y + b.y + c.y) / 3f
-            val pz = (a.z + b.z + c.z) / 3f
-            // Leinwand als große Lichtquelle vorn
-            val lx = -px
-            val ly = -py
-            val lz = -SCREEN_DIST - pz
+            val nx = uy * wz - uz * wy
+            val ny = uz * wx - ux * wz
+            val nz = ux * wy - uy * wx
+            val l = sqrt(nx * nx + ny * ny + nz * nz).coerceAtLeast(1e-6f)
+            return v(nx / l, ny / l, nz / l)
+        }
+
+        /** Licht: Leinwand vorn als große Lichtquelle, wenig Grundlicht, etwas Streulicht am Körper. */
+        private fun light(p: V, n: V, base: FloatArray, twoSided: Boolean = false): FloatArray {
+            val lx = -p.x
+            val ly = -p.y
+            val lz = -SCREEN_DIST - p.z
             val d = sqrt(lx * lx + ly * ly + lz * lz).coerceAtLeast(0.1f)
-            val both = twoSided || twoSidedDefault
-            var dot = (nx * lx + ny * ly + nz * lz) / d
-            if (both) dot = abs(dot)
-            val screen = max(0f, dot) * 26f / (d * d + 30f)
-            val up = (if (both) abs(ny) else max(0f, ny)) * 0.06f
-            // Etwas Streulicht in Körpernähe, damit Beine und Popcorn sichtbar sind
-            val near = max(0f, 1f - sqrt(px * px + py * py + pz * pz) / 1.6f) * 0.35f
-            // Grundlicht nicht zu dunkel: Schwarz ist in der Brille durchsichtig
-            val f = 0.38f + screen + up + near
+            var dot = (n.x * lx + n.y * ly + n.z * lz) / d
+            if (twoSided) dot = abs(dot)
+            // Weiches Umlicht: auch abgewandte Flächen bekommen etwas
+            val wrap = (dot + 0.35f) / 1.35f
+            val screen = max(0f, wrap) * 22f / (d * d + 30f)
+            val up = (if (twoSided) abs(n.y) else max(0f, n.y)) * 0.05f
+            val near = max(0f, 1f - sqrt(p.x * p.x + p.y * p.y + p.z * p.z) / 1.5f) * 0.32f
+            // Bühnenlicht vorn: Vorhang und Volant leuchten etwas
+            val stage = smooth((-8.5f - p.z) / 3f) * 0.32f
+            val f = 0.13f + screen + up + near + stage
             return floatArrayOf(min(1f, base[0] * f * 1.6f), min(1f, base[1] * f * 1.6f), min(1f, base[2] * f * 1.6f), 1f)
         }
     }
@@ -664,7 +835,10 @@ class CinemaScene {
     }
 
     companion object {
-        /** Abstand der Leinwand in Metern. */
+        /** Bilder liegen in res/drawable-nodpi, vom Controller gesetzt. */
+        @Volatile
+        var resources: Resources? = null
+
         const val SCREEN_DIST = 12f
         private const val EYE_HEIGHT = 1.2f
         private const val ROW_DEPTH = 1.1f
@@ -672,54 +846,54 @@ class CinemaScene {
         private const val SEAT_W = 0.62f
         private const val FRONT_ROWS = -8
         private const val BACK_ROWS = 3
-        private const val BACK_Z0 = 0.22f
-        private const val BACK_Z1 = 0.32f
-        private const val BACK_TOP = 1.05f
+        private const val BACK_Z0 = 0.2f
+        private const val BACK_Z1 = 0.33f
+        private const val BACK_TOP = 1.08f
         private const val PROJ_Y = 3.4f
         private const val NEIGHBOR_X = SEAT_W
-        private const val STRIDE = 7 * 4
+        private const val STRIDE = 9 * 4
 
-        private const val COLOR_VS = """#version 300 es
+        /** Zuschauer-Bild: 8 Figuren nebeneinander, Größe einer Figur in Metern. */
+        private const val AUDIENCE_CELLS = 8
+        private const val SPRITE_W = 0.53f
+        private const val SPRITE_H = 0.66f
+
+        /** Bildbereich der Nachbarn (wie tools/cinema_art.py). */
+        private const val SIDE_Z0 = -0.62f
+        private const val SIDE_Z1 = 0.34f
+        private const val SIDE_Y0 = -1.2f
+        private const val SIDE_Y1 = 0.32f
+
+        private const val UV_XY = 0
+        private const val UV_XZ = 1
+        private const val UV_ZY = 2
+
+        private const val VS = """#version 300 es
 uniform mat4 uMvp;
 layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec2 aUv;
 layout(location = 2) in vec4 aColor;
+out vec2 vUv;
 out vec4 vColor;
 void main() {
     gl_Position = uMvp * vec4(aPos, 1.0);
+    vUv = aUv;
     vColor = aColor;
 }
 """
 
-        private const val COLOR_FS = """#version 300 es
-precision mediump float;
-uniform float uBright;
-in vec4 vColor;
-out vec4 fragColor;
-void main() {
-    fragColor = vec4(min(vColor.rgb * uBright, vec3(1.0)), vColor.a);
-}
-"""
-
-        private const val TEX_VS = """#version 300 es
-uniform mat4 uMvp;
-layout(location = 0) in vec3 aPos;
-layout(location = 1) in vec2 aUv;
-out vec2 vUv;
-void main() {
-    gl_Position = uMvp * vec4(aPos, 1.0);
-    vUv = aUv;
-}
-"""
-
-        private const val TEX_FS = """#version 300 es
+        private const val FS = """#version 300 es
 precision mediump float;
 uniform sampler2D uTex;
 uniform float uBright;
 in vec2 vUv;
+in vec4 vColor;
 out vec4 fragColor;
 void main() {
-    vec4 c = texture(uTex, vUv);
-    fragColor = vec4(min(c.rgb * uBright, vec3(c.a)), c.a);
+    vec4 t = texture(uTex, vUv);
+    float a = t.a * vColor.a;
+    vec3 rgb = min(t.rgb * vColor.rgb * uBright, vec3(t.a)) * vColor.a;
+    fragColor = vec4(rgb, a);
 }
 """
     }
