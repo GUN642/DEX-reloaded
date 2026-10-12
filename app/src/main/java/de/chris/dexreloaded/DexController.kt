@@ -219,6 +219,7 @@ object DexController {
         )
         HomeStore.init(appContext)
         de.chris.dexreloaded.render.GlassFonts.init(appContext)
+        de.chris.dexreloaded.render.CinemaScene.resources = appContext.resources
         Notifications.init(appContext)
         Workspaces.init(appContext)
         Notifications.onPopup = { note ->
