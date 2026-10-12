@@ -299,7 +299,10 @@ private fun SmallAppIcon(packageName: String, sizeDp: Int) {
 private fun Wallpaper() {
     val version by HomeStore.wallpaperVersion.collectAsState()
     // Im Breitbild: mittleres Drittel des breiten Bilds, passend zu dem, was die Brille daneben zeichnet
-    val wide by DexController.wideMode.collectAsState()
+    val wideMode by DexController.wideMode.collectAsState()
+    val monitor by DexController.monitorActive.collectAsState()
+    // Nur auf der Brille ist das Breitbild drei Bildschirme breit, auf dem Monitor normal
+    val wide = wideMode && !monitor
     val bmp by produceState<Bitmap?>(initialValue = null, version, wide) {
         value = if (wide) HomeStore.loadWideCenter() else HomeStore.loadWallpaper()
     }

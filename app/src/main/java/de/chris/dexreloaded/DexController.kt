@@ -154,13 +154,73 @@ object DexController {
     val extraScreens: StateFlow<Set<Int>> = _extraScreens.asStateFlow()
 
     /** Aktive Bildschirme. Im Breitbild nur die drei der Grundreihe. */
-    fun activeScreens(): Set<Int> = if (wide) ScreenLayout.BASE else ScreenLayout.BASE + _extraScreens.value
+    fun activeScreens(): Set<Int> = when {
+        wide && monitor -> setOf(1)
+        wide -> ScreenLayout.BASE
+        else -> ScreenLayout.BASE + _extraScreens.value
+    }
+
+    // ---- Monitor-Modus ----
+
+    /** Anzeige: 0 automatisch (Viture angesteckt = Brille, sonst Monitor), 1 immer Brille, 2 immer Monitor. */
+    private val _displayMode = MutableStateFlow(0)
+    val displayMode: StateFlow<Int> = _displayMode.asStateFlow()
+
+    private val _monitorActive = MutableStateFlow(false)
+    /** Arbeitsfläche läuft auf einem normalen Bildschirm: flach, pixelgenau, ohne Kopf-Tracking. */
+    val monitorActive: StateFlow<Boolean> = _monitorActive.asStateFlow()
+
+    private val monitor get() = _monitorActive.value
+
+    private val _monitorScale = MutableStateFlow(1f)
+    /** Skalierung der Oberfläche auf dem Monitor (Dichte der virtuellen Displays). */
+    val monitorScale: StateFlow<Float> = _monitorScale.asStateFlow()
+
+    fun setDisplayMode(mode: Int) {
+        _displayMode.value = mode
+        prefs.edit().putInt("displayMode", mode).apply()
+        if (presentation != null) log("Anzeigeart gilt ab dem nächsten Start der Arbeitsfläche.")
+    }
+
+    fun setMonitorScale(scale: Float) {
+        _monitorScale.value = scale
+        prefs.edit().putFloat("monitorScale", scale).apply()
+        if (presentation != null && monitor) {
+            // Neue Dichte gilt nur für neue Displays: alles neu anlegen
+            releaseAllScreens()
+            if (WideDesk.active) WideDesk.stop()
+            main.postDelayed({ restoreScreens() }, 300)
+        }
+    }
+
+    /** Ist eine Viture-Brille per USB angesteckt? */
+    fun vitureConnected(): Boolean = runCatching {
+        appContext.getSystemService(android.hardware.usb.UsbManager::class.java)
+            .deviceList.values.any { it.vendorId == 0x35CA }
+    }.getOrDefault(false)
+
+    private fun decideMonitor(): Boolean = when (_displayMode.value) {
+        1 -> false
+        2 -> true
+        else -> !vitureConnected()
+    }
+
+    /** Größe und Dichte für neue virtuelle Displays: Monitor in seiner echten Auflösung. */
+    private fun vdConfig(): ScreenConfig {
+        val c = _screenConfig.value
+        if (!monitor) return c
+        val mode = _glassDisplay.value?.mode ?: return c
+        val w = mode.physicalWidth
+        val h = mode.physicalHeight
+        val dpi = (h * 0.185f * _monitorScale.value).toInt().coerceIn(120, 640)
+        return c.copy(width = w, height = h, dpi = dpi)
+    }
 
     /** Kinomodus: ein großer Bildschirm, fest im Raum (nur ohne Breitbild). */
     private val _cinema = MutableStateFlow(false)
     val cinema: StateFlow<Boolean> = _cinema.asStateFlow()
 
-    private val cinemaActive get() = _cinema.value && !wide
+    private val cinemaActive get() = _cinema.value && !wide && !monitor
 
     /** Trackpad ist offen: Tastatur und Maus gehen an die Brille. */
     var trackpadActive = false
@@ -204,6 +264,8 @@ object DexController {
         )
         _extraScreens.value = ScreenLayout.EXTRAS.filter { prefs.getBoolean("extraScreen$it", false) }.toSet()
         _cinema.value = prefs.getBoolean("cinema", false)
+        _displayMode.value = prefs.getInt("displayMode", 0)
+        _monitorScale.value = prefs.getFloat("monitorScale", 1f)
         applyViewSettings()
         _screenConfig.value = ScreenConfig(
             width = prefs.getInt("width", 1920),
@@ -311,6 +373,9 @@ object DexController {
             return
         }
         if (presentation != null) return
+        _monitorActive.value = decideMonitor()
+        renderer.monitorMode = monitor
+        applyLayout()
         try {
             val p = GlassPresentation(activity, display, renderer)
             p.setOnDismissListener {
@@ -320,8 +385,8 @@ object DexController {
             presentation = p
             _presentationShown.value = true
             renderer.lookAt(_lookIndex.value)
-            if (_viewSettings.value.headTracking || cinemaActive) VitureImu.start()
-            log("Arbeitsfläche auf ${display.name} gestartet")
+            if (!monitor && (_viewSettings.value.headTracking || cinemaActive)) VitureImu.start()
+            log("Arbeitsfläche auf ${display.name} gestartet" + if (monitor) " (Monitor-Modus)" else "")
             resetPointer(_lookIndex.value)
             restoreScreens()
             main.removeCallbacks(taskPoll)
@@ -375,7 +440,7 @@ object DexController {
         renderer.snapMode = v.snapMode
         renderer.cinemaSize = v.cinemaSize
         if (presentation != null) {
-            if (v.headTracking || cinemaActive) VitureImu.start() else VitureImu.stop()
+            if (!monitor && (v.headTracking || cinemaActive)) VitureImu.start() else VitureImu.stop()
         }
     }
 
@@ -393,7 +458,7 @@ object DexController {
     fun lookRelative(delta: Int) {
         val cur = _lookIndex.value
         val active = activeScreens()
-        val next = if (cinemaActive) {
+        val next = if (cinemaActive || monitor) {
             val list = ScreenLayout.sorted(active)
             list.getOrNull(list.indexOf(cur) + delta)
         } else {
@@ -568,7 +633,7 @@ object DexController {
         _screenApps.update { it + (index to app) }
         addRecent(app)
         saveApps()
-        val c = _screenConfig.value
+        val c = vdConfig()
         launchOnScreen(index, app.component, c.width, c.height, c.dpi, c.forceStop, then)
     }
 
@@ -628,9 +693,9 @@ object DexController {
     /** Gemerkte Apps auf freien Bildschirmen starten. */
     fun restoreScreens() {
         if (presentation == null || ShizukuManager.service.value == null) return
-        val c = _screenConfig.value
+        val c = vdConfig()
         if (wide) {
-            WideDesk.start(c.width, c.height, c.dpi, c.keepPhoneFocus)
+            WideDesk.start(c.width, c.height, c.dpi, c.keepPhoneFocus, if (monitor) 1 else WorkspaceRenderer.WIDE_PANELS)
             return
         }
         val active = activeScreens()
@@ -688,7 +753,7 @@ object DexController {
 
     private fun screenSize(i: Int): Pair<Float, Float> {
         val slot = _slots.value[i]
-        val c = _screenConfig.value
+        val c = vdConfig()
         return (slot?.width ?: c.width).toFloat() to (slot?.height ?: c.height).toFloat()
     }
 
@@ -733,7 +798,7 @@ object DexController {
 
     private fun onGazeScreen(i: Int) {
         gazeScreen = i
-        if (cinemaActive || !_gazeFollow.value || dragScreen >= 0 || WideDesk.dragging || i == pointerScreen) return
+        if (cinemaActive || monitor || !_gazeFollow.value || dragScreen >= 0 || WideDesk.dragging || i == pointerScreen) return
         resetPointer(i)
     }
 
@@ -754,7 +819,8 @@ object DexController {
             }
         } else {
             // Über die Ränder in den Nachbarn (nicht im Kino)
-            val active = if (cinemaActive) emptySet() else activeScreens()
+            // Kino und Monitor-Arbeitsflächen: kein Übergang in Nachbarn
+            val active = if (cinemaActive || monitor) emptySet() else activeScreens()
             if (pointerX < 0f) {
                 ScreenLayout.neighbor(pointerScreen, -1, 0, active)?.let { n ->
                     val (nw, _) = screenSize(n)
@@ -797,7 +863,7 @@ object DexController {
 
     /** Maustaste oder Finger gedrückt: Berührung beginnt. */
     /** Zeiger als x-Koordinate der Breitbildfläche. */
-    private fun canvasX() = pointerScreen * screenSize(0).first + pointerX
+    private fun canvasX() = (pointerScreen - if (monitor) 1 else 0) * screenSize(pointerScreen).first + pointerX
 
     fun pointerDown() {
         onTextContextLost?.invoke()
@@ -1053,6 +1119,7 @@ object DexController {
 
     /** Bildschirm für Einblendungen: der, auf den man gerade schaut. */
     private fun overlayScreen(): Int = when {
+        monitor -> if (wide) 1 else _lookIndex.value
         cinemaActive -> _lookIndex.value
         gazeScreen in activeScreens() -> gazeScreen
         else -> _lookIndex.value
@@ -1327,7 +1394,7 @@ object DexController {
             when {
                 i !in active || target == null -> if (slot != null) releaseScreen(i)
                 slot == null || slot.component != target.component -> {
-                    val c = _screenConfig.value
+                    val c = vdConfig()
                     launchOnScreen(i, target.component, c.width, c.height, c.dpi, false)
                 }
             }

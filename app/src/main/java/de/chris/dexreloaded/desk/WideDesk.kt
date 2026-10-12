@@ -76,7 +76,13 @@ object WideDesk {
     /** Ein Fenster wird gerade verschoben, vergrößert oder darin gezogen. */
     val dragging get() = drag != null
 
-    val canvasW get() = panelW * WIDE_PANELS
+    /** Breite in Bildschirmen: Brille 3, Monitor 1. */
+    private var panels = WIDE_PANELS
+
+    val canvasW get() = panelW * panels
+
+    /** Linker Rand des Startbildschirms: Brille Mitte, Monitor ganze Fläche. */
+    private val homeLeft get() = if (panels == 1) 0f else panelW
 
     fun init(context: Context, r: WorkspaceRenderer, logger: (String) -> Unit) {
         appContext = context.applicationContext
@@ -85,7 +91,8 @@ object WideDesk {
     }
 
     /** Hintergrund anlegen und den Startbildschirm darauf starten. Mehrfach aufrufbar. */
-    fun start(width: Int, height: Int, density: Int, keepPhoneFocus: Boolean) {
+    fun start(width: Int, height: Int, density: Int, keepPhoneFocus: Boolean, panelCount: Int = WIDE_PANELS) {
+        panels = panelCount
         panelW = width.toFloat()
         panelH = height.toFloat()
         dpi = density
@@ -210,7 +217,8 @@ object WideDesk {
         val w = geom?.get(2) ?: minOf(DEFAULT_W, panelW - 80f)
         val h = geom?.get(3) ?: minOf(DEFAULT_H, panelH - TITLE_PX - 80f)
         val cascade = (wins.size % 5) * 40f
-        val x = geom?.get(0) ?: (panel.coerceIn(0, WIDE_PANELS - 1) * panelW + (panelW - w) / 2f + cascade)
+        val x = geom?.get(0)?.coerceIn(-w + 120f, canvasW - 120f)
+            ?: (panel.coerceIn(0, panels - 1) * panelW + (panelW - w) / 2f + cascade)
         val y = geom?.get(1) ?: (TITLE_PX + (panelH - TITLE_PX - h) / 2f + cascade)
         val win = Win(nextId++, app, x, y, w, h)
         wins.add(win)
@@ -257,7 +265,7 @@ object WideDesk {
         val r = win.restore
         if (r == null) {
             win.restore = floatArrayOf(win.x, win.y, win.w, win.h)
-            val panel = ((win.x + win.w / 2f) / panelW).toInt().coerceIn(0, WIDE_PANELS - 1)
+            val panel = ((win.x + win.w / 2f) / panelW).toInt().coerceIn(0, panels - 1)
             win.x = panel * panelW
             win.y = TITLE_PX
             win.w = panelW
@@ -293,18 +301,21 @@ object WideDesk {
 
     private val prefs get() = appContext.getSharedPreferences("dex", Context.MODE_PRIVATE)
 
-    private fun savedWindows(): List<WinState> = Workspaces.decodeWindows(prefs.getString("wideWindows", null))
+    /** Fensterlage getrennt für Brille (drei breit) und Monitor. */
+    private val windowsKey get() = if (panels == 1) "wideWindowsMonitor" else "wideWindows"
+
+    private fun savedWindows(): List<WinState> = Workspaces.decodeWindows(prefs.getString(windowsKey, null))
 
     /** Fenster und Lage merken (nach jeder Änderung durch den Nutzer). */
     private fun persist() {
-        prefs.edit().putString("wideWindows", Workspaces.encodeWindows(currentStates())).apply()
+        prefs.edit().putString(windowsKey, Workspaces.encodeWindows(currentStates())).apply()
     }
 
     private fun currentStates() = wins.map { WinState(it.app, it.x, it.y, it.w, it.h) }
 
     /** Nur merken, öffnet beim nächsten Start des Breitbilds. */
     fun rememberWindows(list: List<WinState>) {
-        prefs.edit().putString("wideWindows", Workspaces.encodeWindows(list)).apply()
+        prefs.edit().putString(windowsKey, Workspaces.encodeWindows(list)).apply()
     }
 
     /** Fenster für einen Arbeitsplatz: die offenen, sonst die gemerkten. */
@@ -398,8 +409,8 @@ object WideDesk {
             }
         }
         focusedWin = null
-        if (bgDisplayId >= 0 && cx >= panelW && cx < 2 * panelW) {
-            val d = Drag.Touch(bgDisplayId, panelW, 0f, panelW - 1, panelH - 1, now)
+        if (bgDisplayId >= 0 && cx >= homeLeft && cx < homeLeft + panelW) {
+            val d = Drag.Touch(bgDisplayId, homeLeft, 0f, panelW - 1, panelH - 1, now)
             drag = d
             touch(d, MotionEvent.ACTION_DOWN, cx, cy)
         }
@@ -440,8 +451,8 @@ object WideDesk {
         val win = wins.lastOrNull { cx >= it.x && cx <= it.x + it.w && cy >= it.y && cy <= it.y + it.h }
         if (win != null) {
             if (win.displayId >= 0) svc.injectScroll(win.displayId, cx - win.x, cy - win.y, h, v)
-        } else if (bgDisplayId >= 0 && cx >= panelW && cx < 2 * panelW) {
-            svc.injectScroll(bgDisplayId, cx - panelW, cy, h, v)
+        } else if (bgDisplayId >= 0 && cx >= homeLeft && cx < homeLeft + panelW) {
+            svc.injectScroll(bgDisplayId, cx - homeLeft, cy, h, v)
         }
     }
 
