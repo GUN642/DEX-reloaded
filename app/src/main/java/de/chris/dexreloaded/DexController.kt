@@ -777,7 +777,7 @@ object DexController {
         renderer.pointerY = pointerY
         val (w, h) = screenSize(pointerScreen)
         navExpanded = !wide && dragScreen < 0 && _slots.value[pointerScreen] != null &&
-            pointerY > h - NavBar.TRIGGER_H && abs(pointerX - w / 2f) < NavBar.TRIGGER_W
+            pointerY > h - NavBar.TRIGGER_TOP && pointerY < h - NavBar.TRIGGER_BOTTOM && abs(pointerX - w / 2f) < NavBar.TRIGGER_W
         renderer.navExpanded = navExpanded
     }
 

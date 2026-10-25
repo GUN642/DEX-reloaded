@@ -15,12 +15,17 @@ import android.graphics.RectF
 object NavBar {
     const val WIDTH = 360f
     const val HEIGHT = 64f
-    const val MARGIN = 14f
+    /** Abstand vom unteren Rand: höher gesetzt, damit Leisten und Knöpfe der Apps frei bleiben (ab 0.7.2). */
+    const val MARGIN = 150f
     const val HANDLE_W = 140f
     const val HANDLE_H = 8f
 
-    /** Zeiger so nah am unteren Rand (und mittig) klappt die Leiste auf. */
-    const val TRIGGER_H = 110f
+    /** Zeiger in diesem Band um die Leiste klappt sie auf (Abstand vom unteren Rand). */
+    const val TRIGGER_TOP = MARGIN + HEIGHT + 50f
+    const val TRIGGER_BOTTOM = MARGIN - 40f
+
+    /** Unterkante des eingeklappten Griffs vom unteren Rand. */
+    const val HANDLE_BOTTOM = MARGIN + HEIGHT / 2f - HANDLE_H / 2f
     const val TRIGGER_W = WIDTH / 2f + 60f
 
     fun barBitmap(): Bitmap {
