@@ -795,7 +795,7 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
             fillQuad(i, w / 2f - NavBar.WIDTH / 2f, h - NavBar.MARGIN - NavBar.HEIGHT, w / 2f + NavBar.WIDTH / 2f, h - NavBar.MARGIN, 0.997f)
             tex = navBarTexture
         } else {
-            fillQuad(i, w / 2f - NavBar.HANDLE_W / 2f, h - 10f - NavBar.HANDLE_H, w / 2f + NavBar.HANDLE_W / 2f, h - 10f, 0.997f)
+            fillQuad(i, w / 2f - NavBar.HANDLE_W / 2f, h - NavBar.HANDLE_BOTTOM - NavBar.HANDLE_H, w / 2f + NavBar.HANDLE_W / 2f, h - NavBar.HANDLE_BOTTOM, 0.997f)
             tex = navHandleTexture
         }
         GLES30.glDisable(GLES30.GL_DEPTH_TEST)
