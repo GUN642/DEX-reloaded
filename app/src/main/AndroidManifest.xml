@@ -38,13 +38,6 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- Viture-Brille angesteckt: App anbieten, USB-Zugriff dauerhaft erlauben -->
-            <intent-filter>
-                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
-            </intent-filter>
-            <meta-data
-                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
-                android:resource="@xml/usb_device_filter" />
         </activity>
 
         <!-- Startbildschirm auf der Brille, wird per am start auf ein virtuelles Display gelegt -->
