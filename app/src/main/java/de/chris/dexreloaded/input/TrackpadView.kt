@@ -95,6 +95,8 @@ class TrackpadView(context: Context) : View(context) {
         isFocusable = true
         isFocusableInTouchMode = true
         setBackgroundColor(Color.BLACK)
+        // Finger, Maus und Touchpad sofort zustellen, nicht erst zum nächsten Bild gesammelt
+        requestUnbufferedDispatch(InputDevice.SOURCE_CLASS_POINTER)
     }
 
     override fun onDraw(canvas: Canvas) {

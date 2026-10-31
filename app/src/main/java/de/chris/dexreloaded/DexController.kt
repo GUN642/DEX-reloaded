@@ -132,15 +132,17 @@ object DexController {
     private val _gazeFollow = MutableStateFlow(true)
     val gazeFollow: StateFlow<Boolean> = _gazeFollow.asStateFlow()
 
-    /** Zeigergeschwindigkeit für Trackpad und Maus. */
-    data class InputSettings(val touchSpeed: Float = 1.6f, val mouseSpeed: Float = 1.3f)
+    /** Zeigergeschwindigkeit für Trackpad und Maus, dazu weniger Verzögerung beim Zeichnen. */
+    data class InputSettings(val touchSpeed: Float = 1.6f, val mouseSpeed: Float = 1.3f, val lowLatency: Boolean = true)
 
     private val _inputSettings = MutableStateFlow(InputSettings())
     val inputSettings: StateFlow<InputSettings> = _inputSettings.asStateFlow()
 
     fun updateInputSettings(v: InputSettings) {
         _inputSettings.value = v
-        prefs.edit().putFloat("touchSpeed", v.touchSpeed).putFloat("mouseSpeed", v.mouseSpeed).apply()
+        prefs.edit().putFloat("touchSpeed", v.touchSpeed).putFloat("mouseSpeed", v.mouseSpeed)
+            .putBoolean("lowLatency", v.lowLatency).apply()
+        renderer.lowLatency = v.lowLatency
     }
 
     /** Breitbild mit Fenstern statt drei getrennter Bildschirme. */
@@ -281,7 +283,9 @@ object DexController {
         _inputSettings.value = InputSettings(
             touchSpeed = prefs.getFloat("touchSpeed", 1.6f),
             mouseSpeed = prefs.getFloat("mouseSpeed", 1.3f),
+            lowLatency = prefs.getBoolean("lowLatency", true),
         )
+        renderer.lowLatency = _inputSettings.value.lowLatency
         HomeStore.init(appContext)
         de.chris.dexreloaded.render.GlassFonts.init(appContext)
         de.chris.dexreloaded.render.CinemaScene.resources = appContext.resources
