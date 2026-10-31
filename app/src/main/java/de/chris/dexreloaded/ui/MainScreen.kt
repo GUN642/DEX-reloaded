@@ -224,6 +224,51 @@ private fun ShizukuCard(onOpenShizuku: () -> Unit) {
             }
             OutlinedButton(onClick = { ShizukuManager.refresh() }) { Text("Prüfen") }
         }
+        val context = LocalContext.current
+        val devOptions = {
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(android.provider.Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                        .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+            }
+        }
+        when (status) {
+            ShizukuStatus.BEREIT, ShizukuStatus.VERBINDE -> {
+                Text(
+                    "Shizuku läuft bis zum nächsten Neustart des Handys. Wireless Debugging darfst du jetzt ausschalten und das WLAN trennen. Die Entwickleroptionen selbst bitte an lassen.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Pill("Entwickleroptionen", false, { devOptions() })
+            }
+            ShizukuStatus.NICHT_GESTARTET -> {
+                var open by remember { mutableStateOf(false) }
+                Pill(if (open) "Unterwegs starten ▴" else "Unterwegs starten, ohne fremdes WLAN ▾", open, { open = !open })
+                if (open) {
+                    Label("1. Zu Hause starten")
+                    Text(
+                        "Im eigenen WLAN starten, danach Wireless Debugging aus. Shizuku läuft weiter bis zum Neustart, auch ohne WLAN. Im Hotel das Handy also nicht neu starten.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Label("2. Eigenes WLAN")
+                    Text(
+                        "Wireless Debugging braucht ein WLAN, aber kein Internet. Hotspot eines zweiten Geräts oder ein Reiserouter genügt, ohne mobile Daten.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Label("3. Per Kabel vom Laptop")
+                    Text(
+                        "USB-Debugging an, Handy anschließen und den Befehl ausführen, den Shizuku unter „Über Computer starten“ zeigt. Danach Kabel ab.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "Falls doch im Hotel-WLAN: Fremde Geräte brauchen den Kopplungscode, den nur dein Handy zeigt. Wireless Debugging direkt nach dem Start wieder ausschalten.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Pill("Entwickleroptionen", false, { devOptions() })
+                }
+            }
+            else -> Unit
+        }
     }
 }
 
