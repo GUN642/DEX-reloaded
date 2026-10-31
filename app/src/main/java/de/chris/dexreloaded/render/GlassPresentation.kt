@@ -27,6 +27,9 @@ class GlassPresentation(
         if (best != null && best.modeId != cur.modeId) {
             window?.let { w -> w.attributes = w.attributes.apply { preferredDisplayModeId = best.modeId } }
         }
+        renderer.refreshRate = (best ?: cur).refreshRate
+        // Monitore und Fernseher mit Spielmodus (ALLM): Bildverbesserung aus, weniger Verzögerung
+        window?.setPreferMinimalPostProcessing(true)
         val view = GLSurfaceView(context).apply {
             setEGLContextClientVersion(3)
             setEGLConfigChooser(8, 8, 8, 8, 16, 0)

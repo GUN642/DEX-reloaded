@@ -289,5 +289,15 @@ fun InputCard() {
             onValueChangeFinished = { DexController.updateInputSettings(input.copy(mouseSpeed = mouse)) },
             valueRange = 0.3f..4f,
         )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("Weniger Verzögerung")
+                Text(
+                    "Zeiger und Kopf werden später im Bildtakt gelesen. Falls es ruckelt, ausschalten.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(checked = input.lowLatency, onCheckedChange = { DexController.updateInputSettings(input.copy(lowLatency = it)) })
+        }
     }
 }

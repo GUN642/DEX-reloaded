@@ -433,7 +433,39 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
         geometryDirty = true
     }
 
+    /** Bildwiederholrate des Displays (von der Presentation gesetzt). */
+    @Volatile
+    var refreshRate = 60f
+
+    /** Weniger Verzögerung: erst spät im Bildtakt Zeiger und Kopf lesen und zeichnen. */
+    @Volatile
+    var lowLatency = true
+
+    private var lastRenderNs = 0L
+
+    /**
+     * onDrawFrame beginnt direkt nach dem letzten Bildwechsel. Wer sofort zeichnet, zeigt Zeiger
+     * und Kopflage von diesem frühen Zeitpunkt. Darum einen Teil des Bildtakts warten, wenn das
+     * Zeichnen schnell genug ist. So sind Zeiger und Kopf beim Anzeigen frischer.
+     */
+    private fun lateLatch() {
+        if (!lowLatency) return
+        val period = (1_000_000_000L / refreshRate.coerceIn(30f, 240f)).toLong()
+        if (lastRenderNs > period / 4) return
+        val wait = minOf(period * 2 / 5, period - lastRenderNs * 3 - 2_000_000L)
+        if (wait > 1_000_000L) java.util.concurrent.locks.LockSupport.parkNanos(wait)
+    }
+
     override fun onDrawFrame(gl: GL10?) {
+        lateLatch()
+        val frameStart = System.nanoTime()
+        drawFrameInner()
+        // Gleitender Höchstwert der Zeichenzeit, damit kurze Spitzen nicht übersehen werden
+        val took = System.nanoTime() - frameStart
+        lastRenderNs = if (took > lastRenderNs) took else (lastRenderNs * 7 + took) / 8
+    }
+
+    private fun drawFrameInner() {
         while (true) {
             val task = glTasks.poll() ?: break
             try {
