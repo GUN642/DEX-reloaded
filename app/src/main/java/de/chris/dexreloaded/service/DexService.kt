@@ -163,6 +163,51 @@ class DexService() : IDexService.Stub() {
         ev.recycle()
     }
 
+    override fun injectMouse(displayId: Int, phase: Int, x: Float, y: Float, button: Int, downTime: Long) {
+        when (phase) {
+            0 -> {
+                mouse(displayId, MotionEvent.ACTION_DOWN, x, y, button, 0, downTime)
+                mouse(displayId, MotionEvent.ACTION_BUTTON_PRESS, x, y, button, button, downTime)
+            }
+            1 -> mouse(displayId, MotionEvent.ACTION_MOVE, x, y, button, 0, downTime)
+            2 -> {
+                mouse(displayId, MotionEvent.ACTION_BUTTON_RELEASE, x, y, 0, button, downTime)
+                mouse(displayId, MotionEvent.ACTION_UP, x, y, 0, 0, downTime)
+            }
+            else -> mouse(displayId, MotionEvent.ACTION_HOVER_MOVE, x, y, 0, 0, SystemClock.uptimeMillis())
+        }
+    }
+
+    private fun mouse(displayId: Int, action: Int, x: Float, y: Float, buttonState: Int, actionButton: Int, downTime: Long) {
+        val now = SystemClock.uptimeMillis()
+        val props = arrayOf(
+            MotionEvent.PointerProperties().apply {
+                id = 0
+                toolType = MotionEvent.TOOL_TYPE_MOUSE
+            }
+        )
+        val coords = arrayOf(
+            MotionEvent.PointerCoords().apply {
+                this.x = x
+                this.y = y
+                pressure = if (buttonState != 0) 1f else 0f
+                size = 1f
+            }
+        )
+        val ev = MotionEvent.obtain(
+            downTime, now, action, 1, props, coords, 0, buttonState, 1f, 1f, 0, 0,
+            InputDevice.SOURCE_MOUSE, 0,
+        )
+        // Welche Taste gedrückt oder losgelassen wurde (versteckter Setter)
+        if (actionButton != 0) {
+            runCatching {
+                MotionEvent::class.java.getMethod("setActionButton", Int::class.javaPrimitiveType).invoke(ev, actionButton)
+            }
+        }
+        HiddenApi.inject(ev, displayId)
+        ev.recycle()
+    }
+
     override fun injectKey(displayId: Int, action: Int, keyCode: Int, metaState: Int, repeat: Int, downTime: Long) {
         val now = SystemClock.uptimeMillis()
         val ev = KeyEvent(

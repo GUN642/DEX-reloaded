@@ -429,7 +429,7 @@ object WideDesk {
                 publish()
             }
             is Drag.Touch -> touch(d, MotionEvent.ACTION_MOVE, cx, cy)
-            null -> Unit
+            null -> targetAt(cx, cy)?.let { (id, x, y) -> de.chris.dexreloaded.DexController.hoverAt(id, x, y) }
         }
     }
 
@@ -459,6 +459,22 @@ object WideDesk {
     private fun touch(d: Drag.Touch, action: Int, cx: Float, cy: Float) {
         val x = (cx - d.originX).coerceIn(0f, d.maxX)
         val y = (cy - d.originY).coerceIn(0f, d.maxY)
-        ShizukuManager.service.value?.injectTouch(d.displayId, action, x, y, d.downTime)
+        val phase = when (action) {
+            MotionEvent.ACTION_DOWN -> 0
+            MotionEvent.ACTION_MOVE -> 1
+            else -> 2
+        }
+        de.chris.dexreloaded.DexController.pressInput(d.displayId, phase, x, y, d.downTime)
+    }
+
+    /** Display und Punkt darin unter dem Zeiger: Fensterinhalt oder Startbildschirm, sonst null. */
+    fun targetAt(cx: Float, cy: Float): Triple<Int, Float, Float>? {
+        val win = wins.lastOrNull { cx >= it.x && cx <= it.x + it.w && cy >= it.y - TITLE_PX && cy <= it.y + it.h }
+        if (win != null) {
+            if (cy < win.y || win.displayId < 0) return null
+            return Triple(win.displayId, cx - win.x, cy - win.y)
+        }
+        if (bgDisplayId >= 0 && cx >= homeLeft && cx < homeLeft + panelW) return Triple(bgDisplayId, cx - homeLeft, cy)
+        return null
     }
 }
