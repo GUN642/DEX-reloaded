@@ -478,7 +478,80 @@ class TrackpadView(context: Context) : View(context) {
         }
     }
 
+    // ---- Touchpad unter Pointer Capture (z. B. NexDock) ----
+
+    // Ein Touchpad liefert unter Pointer Capture absolute Fingerpositionen statt Bewegung
+    private var padLastX = 0f
+    private var padLastY = 0f
+    private var padDownTime = 0L
+    private var padMoved = 0f
+    private var padMaxFingers = 0
+    private var padScale = 1f
+
+    private fun padAvgX(e: MotionEvent): Float {
+        var s = 0f
+        for (i in 0 until e.pointerCount) s += e.getX(i)
+        return s / e.pointerCount
+    }
+
+    private fun padAvgY(e: MotionEvent): Float {
+        var s = 0f
+        for (i in 0 until e.pointerCount) s += e.getY(i)
+        return s / e.pointerCount
+    }
+
+    /** Fingerbewegung auf dem Touchpad wie am Handy: bewegen, tippen klickt, zwei Finger scrollen. */
+    private fun capturedTouchpad(e: MotionEvent) {
+        when (e.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                // Volle Touchpadbreite etwa 1200 Pixel Zeigerweg
+                val range = e.device?.getMotionRange(MotionEvent.AXIS_X, e.source)?.range ?: 0f
+                padScale = if (range > 0f) 1200f / range else 1f
+                padLastX = e.x
+                padLastY = e.y
+                padDownTime = SystemClock.uptimeMillis()
+                padMoved = 0f
+                padMaxFingers = 1
+            }
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+                padMaxFingers = maxOf(padMaxFingers, e.pointerCount)
+                padLastX = padAvgX(e)
+                padLastY = padAvgY(e)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val x = padAvgX(e)
+                val y = padAvgY(e)
+                val dx = (x - padLastX) * padScale
+                val dy = (y - padLastY) * padScale
+                padLastX = x
+                padLastY = y
+                padMoved += abs(dx) + abs(dy)
+                if (e.pointerCount >= 2) {
+                    DexController.scroll(-dx / 40f, dy / 40f)
+                } else if (dx != 0f || dy != 0f) {
+                    if (mouseButtonDown && !mouseDragging) {
+                        mouseMoved += abs(dx) + abs(dy)
+                        if (mouseMoved > DRAG_SLOP_PX) startMouseDrag()
+                    }
+                    DexController.movePointer(accel(dx, mouseSpeed), accel(dy, mouseSpeed))
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                val short = SystemClock.uptimeMillis() - padDownTime < 250
+                if (short && padMoved < 12f && !mouseButtonDown) {
+                    if (padMaxFingers >= 2) DexController.back() else DexController.click()
+                }
+            }
+        }
+    }
+
     override fun onCapturedPointerEvent(e: MotionEvent): Boolean {
+        if (e.isFromSource(InputDevice.SOURCE_TOUCHPAD) &&
+            e.actionMasked != MotionEvent.ACTION_BUTTON_PRESS && e.actionMasked != MotionEvent.ACTION_BUTTON_RELEASE
+        ) {
+            capturedTouchpad(e)
+            return true
+        }
         when (e.actionMasked) {
             MotionEvent.ACTION_MOVE, MotionEvent.ACTION_HOVER_MOVE -> {
                 // Bei relativer Maus sind x und y die Bewegung seit dem letzten Ereignis
