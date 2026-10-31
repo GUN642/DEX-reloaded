@@ -53,7 +53,7 @@ fun GlassCard(onShowPresentation: () -> Unit) {
             Pill("Monitor", displayMode == 2, { DexController.setDisplayMode(2) })
         }
         Text(
-            "Auto: Ist eine Viture angesteckt, Brille mit 3D und Kopf-Tracking. Sonst Monitor: flach und pixelgenau in der Auflösung des Bildschirms, Bildschirme als Arbeitsflächen zum Durchschalten.",
+            "Auto: Ist eine Viture angesteckt, Brille mit 3D und Kopf-Tracking. Sonst Monitor: flach und pixelgenau in der Auflösung des Bildschirms, Bildschirme als Arbeitsflächen zum Durchschalten. Das gilt für jedes Gerät mit Bildschirm, auch Laptop-Docks wie NexDock. Deren Tastatur und Touchpad gehen, solange am Handy das Trackpad offen ist.",
             style = MaterialTheme.typography.bodySmall,
         )
         val g = glass
