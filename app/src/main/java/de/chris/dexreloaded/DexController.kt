@@ -174,6 +174,65 @@ object DexController {
 
     private val monitor get() = _monitorActive.value
 
+    private val _desktopInput = MutableStateFlow(true)
+    /** Monitor: Eingabe als Maus wie bei DeX (Hover, Rechtsklick öffnet Menüs) statt als Finger. */
+    val desktopInput: StateFlow<Boolean> = _desktopInput.asStateFlow()
+
+    fun setDesktopInput(on: Boolean) {
+        _desktopInput.value = on
+        prefs.edit().putBoolean("desktopInput", on).apply()
+    }
+
+    /** Gerade als Maus einspeisen? Nur auf dem Monitor, die Brille bleibt bei Fingereingabe. */
+    private val mouseInput get() = monitor && _desktopInput.value
+
+    /**
+     * Drücken (0), Ziehen (1) oder Loslassen (2) an einem Display: auf dem Monitor als Maus,
+     * sonst als Finger.
+     */
+    fun pressInput(displayId: Int, phase: Int, x: Float, y: Float, downTime: Long, button: Int = MotionEvent.BUTTON_PRIMARY) {
+        val svc = ShizukuManager.service.value ?: return
+        if (mouseInput) {
+            svc.injectMouse(displayId, phase, x, y, button, downTime)
+        } else {
+            val action = when (phase) {
+                0 -> MotionEvent.ACTION_DOWN
+                1 -> MotionEvent.ACTION_MOVE
+                else -> MotionEvent.ACTION_UP
+            }
+            svc.injectTouch(displayId, action, x, y, downTime)
+        }
+    }
+
+    private var lastHover = 0L
+
+    /** Zeiger schwebt über einem Display (Hover-Effekte wie am PC), höchstens alle 8 ms. */
+    fun hoverAt(displayId: Int, x: Float, y: Float) {
+        if (!mouseInput) return
+        val now = SystemClock.uptimeMillis()
+        if (now - lastHover < 8) return
+        lastHover = now
+        ShizukuManager.service.value?.injectMouse(displayId, 3, x, y, 0, now)
+    }
+
+    /** Rechte Maustaste: auf dem Monitor Rechtsklick (Kontextmenü), sonst Zurück. */
+    fun secondaryClick() {
+        if (!mouseInput) {
+            back()
+            return
+        }
+        val target = if (wide) WideDesk.targetAt(canvasX(), pointerY)
+        else _slots.value[pointerScreen]?.let { Triple(it.displayId, pointerX, pointerY) }
+        if (target == null) {
+            back()
+            return
+        }
+        val t = SystemClock.uptimeMillis()
+        pressInput(target.first, 0, target.second, target.third, t, MotionEvent.BUTTON_SECONDARY)
+        pressInput(target.first, 2, target.second, target.third, t, MotionEvent.BUTTON_SECONDARY)
+        requestPhoneFocus()
+    }
+
     private val _monitorScale = MutableStateFlow(1f)
     /** Skalierung der Oberfläche auf dem Monitor (Dichte der virtuellen Displays). */
     val monitorScale: StateFlow<Float> = _monitorScale.asStateFlow()
@@ -214,7 +273,8 @@ object DexController {
         val mode = _glassDisplay.value?.mode ?: return c
         val w = mode.physicalWidth
         val h = mode.physicalHeight
-        val dpi = (h * 0.185f * _monitorScale.value).toInt().coerceIn(120, 640)
+        // Wie DeX: 1080p mit 160 dpi, dadurch viel Platz in dp und Desktop-Layouts der Apps
+        val dpi = (h * 0.148f * _monitorScale.value).toInt().coerceIn(120, 640)
         return c.copy(width = w, height = h, dpi = dpi)
     }
 
@@ -270,6 +330,7 @@ object DexController {
         _extraScreens.value = ScreenLayout.EXTRAS.filter { prefs.getBoolean("extraScreen$it", false) }.toSet()
         _cinema.value = prefs.getBoolean("cinema", false)
         _displayMode.value = prefs.getInt("displayMode", 0)
+        _desktopInput.value = prefs.getBoolean("desktopInput", true)
         _monitorScale.value = prefs.getFloat("monitorScale", 1f)
         applyViewSettings()
         _screenConfig.value = ScreenConfig(
@@ -779,6 +840,16 @@ object DexController {
         renderer.pointerScreen = if (presentation != null) pointerScreen else -1
         renderer.pointerX = pointerX
         renderer.pointerY = pointerY
+        // Monitor: Zeiger als eigene Ebene über dem Bild, ohne den Umweg durch den GL-Takt
+        val flatPointer = monitor && !cinemaActive && presentation != null
+        renderer.overlayPointer = flatPointer
+        if (flatPointer) {
+            val x = if (wide) canvasX() else pointerX
+            val (_, ph) = screenSize(pointerScreen)
+            presentation?.showPointer(x, pointerY, ph)
+        } else {
+            presentation?.hidePointer()
+        }
         val (w, h) = screenSize(pointerScreen)
         navExpanded = !wide && dragScreen < 0 && _slots.value[pointerScreen] != null &&
             pointerY > h - NavBar.TRIGGER_TOP && pointerY < h - NavBar.TRIGGER_BOTTOM && abs(pointerX - w / 2f) < NavBar.TRIGGER_W
@@ -828,7 +899,7 @@ object DexController {
             pointerX = pointerX.coerceIn(0f, w - 1f)
             pointerY = pointerY.coerceIn(0f, h - 1f)
             _slots.value[dragScreen]?.let { slot ->
-                ShizukuManager.service.value?.injectTouch(slot.displayId, MotionEvent.ACTION_MOVE, pointerX, pointerY, dragDownTime)
+                pressInput(slot.displayId, 1, pointerX, pointerY, dragDownTime)
             }
         } else {
             // Über die Ränder in den Nachbarn (nicht im Kino)
@@ -870,6 +941,7 @@ object DexController {
                 renderer.lookAt(pointerScreen)
             }
             if (wide) WideDesk.pointerMove(canvasX(), pointerY)
+            else _slots.value[pointerScreen]?.let { hoverAt(it.displayId, pointerX, pointerY) }
         }
         syncPointer()
     }
@@ -893,7 +965,7 @@ object DexController {
         val svc = ShizukuManager.service.value ?: return
         dragScreen = pointerScreen
         dragDownTime = SystemClock.uptimeMillis()
-        svc.injectTouch(slot.displayId, MotionEvent.ACTION_DOWN, pointerX, pointerY, dragDownTime)
+        pressInput(slot.displayId, 0, pointerX, pointerY, dragDownTime)
         requestPhoneFocus()
     }
 
@@ -949,7 +1021,7 @@ object DexController {
         val i = dragScreen
         dragScreen = -1
         val slot = _slots.value[i] ?: return
-        ShizukuManager.service.value?.injectTouch(slot.displayId, MotionEvent.ACTION_UP, pointerX, pointerY, dragDownTime)
+        pressInput(slot.displayId, 2, pointerX, pointerY, dragDownTime)
     }
 
     fun click() {

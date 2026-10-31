@@ -840,9 +840,14 @@ class WorkspaceRenderer : GLSurfaceView.Renderer {
     }
 
     /** Mauszeiger als Pfeil, vor der Fläche, ohne Tiefentest. */
+    /** Zeiger zeichnet die Presentation als eigene Ebene (Monitor). */
+    @Volatile
+    var overlayPointer = false
+
     private fun drawPointer() {
         val i = pointerScreen
         if (i !in 0 until MAX_SCREENS || panels[i] == null) return
+        if (overlayPointer) return
         // Kino auf dem Monitor: Maus schaut sich um, kein Zeiger
         if (monitorMode && cinemaActive()) return
         val px = pointerX

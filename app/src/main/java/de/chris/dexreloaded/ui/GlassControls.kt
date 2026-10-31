@@ -70,6 +70,21 @@ fun GlassCard(onShowPresentation: () -> Unit) {
                     Pill("${(f * 100).roundToInt()} %", kotlin.math.abs(monitorScale - f) < 0.01f, { DexController.setMonitorScale(f) })
                 }
             }
+            val desktopInput by DexController.desktopInput.collectAsState()
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Desktop-Eingabe wie DeX")
+                    Text(
+                        "Klicks gehen als Maus an die Apps: Hover, Rechtsklick öffnet Menüs, Text mit der Maus markieren. Aus: Klicks als Finger wie am Handy.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(checked = desktopInput, onCheckedChange = { DexController.setDesktopInput(it) })
+            }
+            Text(
+                "Für Fenster wie bei DeX in der Karte „Bildschirme“ das Breitbild einschalten.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
         if (shown) {
             val rec by DexController.recording.collectAsState()

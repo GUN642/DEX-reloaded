@@ -56,4 +56,9 @@ interface IDexService {
 
     // Aufgabe nach vorn holen. Ohne Recht dafür per am start mit der Basis-Activity auf dem Display.
     String moveTaskToFront(int taskId, String component, int displayId) = 17;
+
+    // Maus wie DeX (Hover, Rechtsklick, Mausverhalten der Apps).
+    // phase: 0 drücken, 1 mit gedrückter Taste bewegen, 2 loslassen, 3 schweben ohne Taste.
+    // button z. B. MotionEvent.BUTTON_PRIMARY oder BUTTON_SECONDARY.
+    oneway void injectMouse(int displayId, int phase, float x, float y, int button, long downTime) = 18;
 }

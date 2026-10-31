@@ -138,7 +138,7 @@ class TrackpadView(context: Context) : View(context) {
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     requestPointerCapture()
-                    if (e.buttonState and MotionEvent.BUTTON_SECONDARY != 0) DexController.back() else mousePress()
+                    if (e.buttonState and MotionEvent.BUTTON_SECONDARY != 0) DexController.secondaryClick() else mousePress()
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> mouseRelease()
             }
@@ -541,7 +541,7 @@ class TrackpadView(context: Context) : View(context) {
             MotionEvent.ACTION_UP -> {
                 val short = SystemClock.uptimeMillis() - padDownTime < 250
                 if (short && padMoved < 12f && !mouseButtonDown) {
-                    if (padMaxFingers >= 2) DexController.back() else DexController.click()
+                    if (padMaxFingers >= 2) DexController.secondaryClick() else DexController.click()
                 }
             }
         }
@@ -573,7 +573,8 @@ class TrackpadView(context: Context) : View(context) {
             }
             MotionEvent.ACTION_BUTTON_PRESS -> when (e.actionButton) {
                 MotionEvent.BUTTON_PRIMARY -> mousePress()
-                MotionEvent.BUTTON_SECONDARY, MotionEvent.BUTTON_BACK -> DexController.back()
+                MotionEvent.BUTTON_SECONDARY -> DexController.secondaryClick()
+                MotionEvent.BUTTON_BACK -> DexController.back()
             }
             MotionEvent.ACTION_BUTTON_RELEASE -> if (e.actionButton == MotionEvent.BUTTON_PRIMARY) mouseRelease()
             MotionEvent.ACTION_SCROLL -> {
